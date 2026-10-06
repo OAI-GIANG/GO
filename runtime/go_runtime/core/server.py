@@ -121,7 +121,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized(): self._json(HTTPStatus.UNAUTHORIZED,{"error":"unauthorized"}); return
         if self.path=="/v1/status": self._json(HTTPStatus.OK,self.app.status()); return
         if self.path.startswith("/v1/tasks/"):
-            task=self.app.store.get_task(self.path.rsplit("/",1)[-1]); self._json(HTTPStatus.NOT_FOUND,{"error":"task not found"} if task is None else task); return
+            task=self.app.store.get_task(self.path.rsplit("/",1)[-1]); self._json(HTTPStatus.NOT_FOUND if task is None else HTTPStatus.OK,{"error":"task not found"} if task is None else task); return
         self._json(HTTPStatus.NOT_FOUND,{"error":"not found"})
     def do_POST(self)->None:
         if not self._authorized(): self._json(HTTPStatus.UNAUTHORIZED,{"error":"unauthorized"}); return
