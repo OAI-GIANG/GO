@@ -52,7 +52,11 @@ class OpenAICompatibleAdapter(ProviderAdapter):
 
     def invoke(self, request: ModelRequest) -> ModelResult:
         msg = request.payload.get("message")
-        content = msg if isinstance(msg, str) else json.dumps(request.payload, ensure_ascii=False)
+        if isinstance(msg, str):
+            extra = {k: v for k, v in request.payload.items() if k != "message"}
+            content = msg + (("\n\n[GO_CONTEXT]\n" + json.dumps(extra, ensure_ascii=False)) if extra else "")
+        else:
+            content = json.dumps(request.payload, ensure_ascii=False)
         body = {"model": self.model_id, "messages": [{"role": "user", "content": content}], "temperature": 0.2}
         req = urllib.request.Request(
             self.base_url + "/chat/completions", data=json.dumps(body).encode(), method="POST",

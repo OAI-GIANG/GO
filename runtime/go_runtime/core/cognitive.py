@@ -113,7 +113,8 @@ class CognitiveService:
         output.update({"provider": result.provider, "model": result.model, "routing": routing})
         observation = {
             "observation_id": f"OBS-{uuid.uuid4().hex}", "task_id": task_id,
-            "capability_id": "reasoning", "provider_id": result.provider, "model_id": result.model,
+            "capability_id": "reasoning", "operation": operation,
+            "provider_id": result.provider, "model_id": result.model,
             "risk_class": "LOW", "metrics": {"success_rate": 1.0 if result.success else 0.0, "latency_ms_p95": 0.0},
             "qualification": {"qualification": "G7"},
             "evidence": {"source_commit": self.commit, "evidence_refs": []}, "observed_at": self._now(),
@@ -269,10 +270,16 @@ class CognitiveService:
         return build_go_hint(compute_go_learning(self.store.list_tasks()))
 
     def reasoning_context(self, advice: CognitiveAdvice) -> str:
-        """Bounded context from memory + learning to feed the reasoning request."""
+        """Bounded context from verified/qualified memory CLAIMS + learning to feed reasoning."""
         parts: list[str] = []
-        if advice.memory_ids:
-            parts.append("memory:" + ",".join(advice.memory_ids))
+        claims: list[str] = []
+        by_id = {r.get("memory_id"): r for r in self.store.all_memory_records()}
+        for mid in advice.memory_ids[: self.MEMORY_RETRIEVAL_LIMIT]:
+            row = by_id.get(mid)
+            if row and row.get("claim"):
+                claims.append(str(row["claim"])[:200])
+        if claims:
+            parts.append("known_facts: " + " | ".join(claims))
         if advice.recommendation and advice.recommendation != "use_verified_context_only":
-            parts.append(advice.recommendation)
-        return "; ".join(parts)[:500]
+            parts.append("advice: " + advice.recommendation)
+        return "; ".join(parts)[:800]
