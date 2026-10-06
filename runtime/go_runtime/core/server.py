@@ -92,7 +92,7 @@ class GOApplication:
         metadata=claimed.get("metadata") or {}
         operation=str(metadata.get("operation") or operation); payload=dict(metadata.get("payload") or payload)
         try:
-            if operation!="echo": raise ValueError("unsupported operation; allowed operations: echo")
+            if operation not in {"echo","ask"}: raise ValueError("unsupported operation; allowed operations: echo, ask")
             result=self.execute(task_id,operation,payload)
             final=self.durable.finalize(task_id,int(claimed["fence_token"]),"COMPLETED",report=result)
             self.store.add_event(task_id,"EXECUTION_COMPLETED",result,utc_now())

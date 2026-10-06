@@ -1,8 +1,9 @@
-"""Canonical model/provider boundary (GO-owned).
+"""Canonical model/provider boundary (GO-owned, pluggable).
 
-A registry of adapters. Default is the deterministic local echo adapter. A real
-OpenAI-compatible provider can be registered through environment variables
-without becoming a state, policy, or evidence owner.
+Default stays the deterministic local echo adapter so bounded `echo` execution
+is unchanged. A real OpenAI-compatible reasoning provider can be registered via
+environment (GO_MODEL_*), exposed as the reasoning target for non-echo
+operations, without becoming a state/policy/evidence owner.
 """
 from __future__ import annotations
 import json
@@ -25,8 +26,6 @@ class ProviderAdapter:
 
 
 class EchoAdapter(ProviderAdapter):
-    """Deterministic local fallback; bounded to the echo operation."""
-
     def __init__(self) -> None:
         super().__init__("local", "local.echo.v1")
 
@@ -45,16 +44,16 @@ class EchoAdapter(ProviderAdapter):
 class OpenAICompatibleAdapter(ProviderAdapter):
     """Real model provider behind an OpenAI-compatible /chat/completions API."""
 
-    def __init__(self, provider_id: str, model_id: str, base_url: str, api_key: str, timeout: int = 30) -> None:
+    def __init__(self, provider_id: str, model_id: str, base_url: str, api_key: str, timeout: int = 60) -> None:
         super().__init__(provider_id, model_id)
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
 
     def invoke(self, request: ModelRequest) -> ModelResult:
-        body = {"model": self.model_id,
-                "messages": [{"role": "user", "content": json.dumps(request.payload, ensure_ascii=False)}],
-                "temperature": 0.2}
+        msg = request.payload.get("message")
+        content = msg if isinstance(msg, str) else json.dumps(request.payload, ensure_ascii=False)
+        body = {"model": self.model_id, "messages": [{"role": "user", "content": content}], "temperature": 0.2}
         req = urllib.request.Request(
             self.base_url + "/chat/completions", data=json.dumps(body).encode(), method="POST",
             headers={"Authorization": "Bearer " + self.api_key, "Content-Type": "application/json",
@@ -70,12 +69,11 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             text = payload["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError):
             raise ValueError("provider malformed response") from None
-        return ModelResult(self.provider_id, self.model_id,
-                           {"text": text, "task_id": request.task_id}, True)
+        return ModelResult(self.provider_id, self.model_id, {"text": text, "task_id": request.task_id}, True)
 
 
 class ModelGateway:
-    """Single execution boundary for model/provider calls with a pluggable registry."""
+    """Single execution boundary for model calls. Registry + reasoning target."""
 
     def __init__(self) -> None:
         self._adapters: dict[tuple[str, str], ProviderAdapter] = {}
@@ -83,14 +81,16 @@ class ModelGateway:
         self.register(echo)
         self.default_provider = echo.provider_id
         self.default_model = echo.model_id
+        self.reasoning_provider: str | None = None
+        self.reasoning_model: str | None = None
         base = os.getenv("GO_MODEL_BASE_URL")
         pid = os.getenv("GO_MODEL_PROVIDER")
         mid = os.getenv("GO_MODEL_ID")
         key = os.getenv("GO_MODEL_API_KEY") or os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY")
         if base and pid and mid and key:
-            self.register(OpenAICompatibleAdapter(pid, mid, base, key, int(os.getenv("GO_MODEL_TIMEOUT", "30"))))
-            self.default_provider = pid
-            self.default_model = mid
+            self.register(OpenAICompatibleAdapter(pid, mid, base, key, int(os.getenv("GO_MODEL_TIMEOUT", "60"))))
+            self.reasoning_provider = pid
+            self.reasoning_model = mid
 
     def register(self, adapter: ProviderAdapter) -> None:
         self._adapters[(adapter.provider_id, adapter.model_id)] = adapter

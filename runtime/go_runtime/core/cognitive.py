@@ -89,7 +89,11 @@ class CognitiveService:
             raise PermissionError("GO kernel denied execution")
         return str(getattr(authorization, "authorization_id", None) or getattr(authorization, "id", None) or f"AUTH-{task_id}")
 
-    def _route(self, task_id: str) -> tuple[str, str, dict[str, Any]]:
+    def _route(self, task_id: str, operation: str) -> tuple[str, str, dict[str, Any]]:
+        # echo stays deterministic; non-echo uses the configured reasoning provider (fail-closed if none).
+        if operation != "echo" and self.models.reasoning_provider and self.models.reasoning_model:
+            return (self.models.reasoning_provider, self.models.reasoning_model,
+                    {"basis": "configured_reasoning_provider", "observations_considered": 0})
         observations = self.store.list_learning_observations()
         routed = select_provider_from_performance("reasoning", self.models.default_provider, observations)
         provider = str(routed.get("provider") or self.models.default_provider)
@@ -104,7 +108,7 @@ class CognitiveService:
         return provider, model, routed
 
     def invoke_model(self, task_id: str, operation: str, payload: dict[str, Any]) -> dict[str, Any]:
-        provider, model, routing = self._route(task_id)
+        provider, model, routing = self._route(task_id, operation)
         result = self.models.invoke(ModelRequest(task_id, provider, model, operation, payload))
         output = dict(result.output)
         output.update({"provider": result.provider, "model": result.model, "routing": routing})
