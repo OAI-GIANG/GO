@@ -11,8 +11,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from projects.LOVE.stt_love.task_contract import TaskContract, TaskContractError
-from projects.LOVE.stt_love.durable_execution import DurableExecution, DurableExecutionError
+from .engine.task_contract import TaskContract, TaskContractError
+from .engine.durable_execution import DurableExecution, DurableExecutionError
 from .cognitive import CognitiveService
 from runtime.go_kernel import GateResult
 
@@ -51,7 +51,7 @@ class GOApplication:
 
 
     def status(self)->dict[str,Any]:
-        return {"name":"GO","version":VERSION,"status":"RUNNING","host":socket.gethostname(),"commit":self.config.commit,"tree":self.config.tree,"environment":self.config.environment,"data_path":str(self.config.data_path),"started_at":self.store.get_meta("started_at"),"operations":["echo"],"integration":"LOVE_COGNITIVE_SUBSTRATE"}
+        return {"name":"GO","version":VERSION,"status":"RUNNING","host":socket.gethostname(),"commit":self.config.commit,"tree":self.config.tree,"environment":self.config.environment,"data_path":str(self.config.data_path),"started_at":self.store.get_meta("started_at"),"operations":["echo"],"integration":"GO_NATIVE_ENGINE"}
 
     def execute(self, task_id:str, operation:str, payload:dict[str,Any])->dict[str,Any]:
         request=__import__("runtime.go_runtime.core.contracts",fromlist=["CognitiveRequest"]).CognitiveRequest(task_id,operation,payload,self.config.commit,self.config.tree,self.config.environment)

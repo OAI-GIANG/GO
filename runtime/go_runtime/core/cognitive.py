@@ -1,4 +1,4 @@
-"""Canonical integration of LOVE cognitive capabilities into GO."""
+"""GO-native cognitive engine (ownership = GO; no LOVE runtime dependency)."""
 from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
@@ -6,10 +6,10 @@ import json
 import uuid
 from typing import Any
 
-from projects.LOVE.stt_love.memory_trust import (
+from .engine.memory_trust import (
     MemoryCore, MemoryRecord, MemoryTrustStatus, TrustCertificate, memory_artifact_digest,
 )
-from projects.LOVE.stt_love.learning import (
+from .engine.learning import (
     build_knowledge_hint, build_learning_artifact_v3, compute_learning, compute_metrics, select_provider_from_performance,
 )
 from runtime.go_kernel import Authority, Evidence, GateResult, Kernel
