@@ -124,6 +124,15 @@ class Handler(BaseHTTPRequestHandler):
             task=self.app.store.get_task(self.path.rsplit("/",1)[-1]); self._json(HTTPStatus.NOT_FOUND if task is None else HTTPStatus.OK,{"error":"task not found"} if task is None else task); return
         self._json(HTTPStatus.NOT_FOUND,{"error":"not found"})
     def do_POST(self)->None:
+        if self.path=="/v1/phone/requests":
+            from . import phone_bridge
+            auth=self.headers.get("Authorization",""); token=auth[7:] if auth.startswith("Bearer ") else None
+            try: body=self._body()
+            except (ValueError,json.JSONDecodeError) as exc: self._json(HTTPStatus.BAD_REQUEST,{"error":str(exc)}); return
+            resp=phone_bridge.handle(self.app, body, token)
+            code=(resp.get("error") or {}).get("code")
+            status=HTTPStatus.OK if resp.get("status")=="SUBMITTED" else HTTPStatus.UNAUTHORIZED if code=="AUTHENTICATION_FAILED" else HTTPStatus.BAD_REQUEST
+            self._json(status, resp); return
         if not self._authorized(): self._json(HTTPStatus.UNAUTHORIZED,{"error":"unauthorized"}); return
         if self.path!="/v1/tasks": self._json(HTTPStatus.NOT_FOUND,{"error":"not found"}); return
         try: task=self.app.submit(self._body())
