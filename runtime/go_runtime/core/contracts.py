@@ -1,4 +1,4 @@
-"""Canonical LOVE↔PARADISE integration contracts."""
+"""Canonical LOVE↔GO integration contracts."""
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping

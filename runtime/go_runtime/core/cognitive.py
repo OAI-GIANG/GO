@@ -1,4 +1,4 @@
-"""Canonical integration of LOVE cognitive capabilities into PARADISE."""
+"""Canonical integration of LOVE cognitive capabilities into GO."""
 from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
@@ -12,7 +12,7 @@ from projects.LOVE.stt_love.memory_trust import (
 from projects.LOVE.stt_love.learning import (
     build_knowledge_hint, build_learning_artifact_v3, compute_learning, compute_metrics, select_provider_from_performance,
 )
-from runtime.paradise_kernel import Authority, Evidence, GateResult, Kernel
+from runtime.go_kernel import Authority, Evidence, GateResult, Kernel
 from .contracts import CognitiveAdvice, CognitiveRequest, ModelRequest
 from .model_gateway import ModelGateway
 from .store import RuntimeStore
@@ -25,7 +25,7 @@ class CognitiveService:
         self.tree = tree
         self.environment = environment
         self.memory = MemoryCore()
-        self.kernel = Kernel(trusted_evidence_sources=frozenset({"paradise.runtime"}))
+        self.kernel = Kernel(trusted_evidence_sources=frozenset({"go_runtime.runtime"}))
         self.models = ModelGateway()
 
     def _now(self) -> str:
@@ -59,14 +59,14 @@ class CognitiveService:
     def authorize(self, task_id: str, operation: str) -> str:
         now = datetime.now(timezone.utc)
         authority = Authority(
-            authority_id="paradise-runtime", subject=task_id,
-            scope=frozenset({"runtime"}), actions=frozenset({"execute"}), issuer="paradise",
+            authority_id="go_runtime-runtime", subject=task_id,
+            scope=frozenset({"runtime"}), actions=frozenset({"execute"}), issuer="go_runtime",
             valid_from=now - timedelta(seconds=1), valid_until=now + timedelta(seconds=60),
             contexts=frozenset({"runtime"}), provenance=self.commit,
         )
         result, authorization = self.kernel.authorize(authority, task_id, "execute", "runtime", "runtime", now)
         if result is not GateResult.ALLOW or authorization is None:
-            raise PermissionError("PARADISE kernel denied execution")
+            raise PermissionError("GO kernel denied execution")
         return str(getattr(authorization, "authorization_id", None) or getattr(authorization, "id", None) or f"AUTH-{task_id}")
 
     def _route(self, task_id: str) -> tuple[str, str, dict[str, Any]]:
@@ -92,7 +92,7 @@ class CognitiveService:
     def emit_evidence(self, task_id: str, event_type: str, claim: str) -> dict[str, Any]:
         evidence_id = f"EVD-{uuid.uuid4().hex}"
         captured = datetime.now(timezone.utc)
-        source = "paradise.runtime"
+        source = "go_runtime.runtime"
         provenance = f"{self.commit}:{self.tree}:{self.environment}"
         canonical = "|".join((evidence_id, task_id, "runtime", source, captured.isoformat(), provenance))
         integrity = sha256(canonical.encode()).hexdigest()
@@ -175,7 +175,7 @@ class CognitiveService:
             raise ValueError("promotion requires canonical evidence for the task")
         record = self._load_memory_record(memory_id)
         certificate = TrustCertificate(
-            certificate_id=f"CERT-{uuid.uuid4().hex}", evaluator_id="paradise-runtime",
+            certificate_id=f"CERT-{uuid.uuid4().hex}", evaluator_id="go_runtime-runtime",
             evaluator_kind="runtime", method="canonical-memory-promotion",
             artifact_digest=memory_artifact_digest(record), source_commit=self.commit, source_tree_sha=self.tree,
             result=target.value, evidence_refs=(evidence_id,), issued_at=self._now(),
@@ -221,7 +221,7 @@ class CognitiveService:
             evidence_refs.append(report["evidence_id"])
         artifact=build_learning_artifact_v3(
             artifact_id=f"LA3-{uuid.uuid4().hex}", artifact_type="observed_learning", artifact_revision=1,
-            source="paradise.runtime", provenance={"commit":self.commit,"tree":self.tree,"environment":self.environment,"task_id":task_id},
+            source="go_runtime.runtime", provenance={"commit":self.commit,"tree":self.tree,"environment":self.environment,"task_id":task_id},
             observation=observation, lesson=lesson, generalization=generalization, evidence_refs=evidence_refs,
             validation_refs=(), validation_assessment_summary=None, capability_impacts=(),
             confidence=1.0 if observed_state=="COMPLETED" else 0.0, known_failures=(),

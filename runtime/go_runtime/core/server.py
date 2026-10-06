@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 import json
 import os
 import secrets
@@ -14,11 +14,11 @@ from typing import Any
 from projects.LOVE.stt_love.task_contract import TaskContract, TaskContractError
 from projects.LOVE.stt_love.durable_execution import DurableExecution, DurableExecutionError
 from .cognitive import CognitiveService
-from runtime.paradise_kernel import GateResult
+from runtime.go_kernel import GateResult
 
 VERSION = "0.1.1"
-ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DATA = ROOT / "runtime" / "data" / "paradise.sqlite3"
+ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_DATA = ROOT / "runtime" / "data" / "go_runtime.sqlite3"
 
 def utc_now() -> str: return datetime.now(timezone.utc).isoformat()
 def env_bool(name: str, default: bool = False) -> bool:
@@ -26,16 +26,16 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 class RuntimeConfig:
     def __init__(self) -> None:
-        self.host=os.getenv("PARADISE_HOST","127.0.0.1"); self.port=int(os.getenv("PARADISE_PORT","8787"))
-        self.api_token=os.getenv("PARADISE_API_TOKEN",""); self.allow_anonymous=env_bool("PARADISE_ALLOW_ANONYMOUS",False)
-        self.data_path=Path(os.getenv("PARADISE_DATA",str(DEFAULT_DATA))).resolve(); self.commit=os.getenv("PARADISE_COMMIT","unknown")
-        self.tree=os.getenv("PARADISE_TREE_SHA","unknown"); self.environment=os.getenv("PARADISE_ENV","local")
+        self.host=os.getenv("GO_HOST","127.0.0.1"); self.port=int(os.getenv("GO_PORT","8787"))
+        self.api_token=os.getenv("GO_API_TOKEN",""); self.allow_anonymous=env_bool("GO_ALLOW_ANONYMOUS",False)
+        self.data_path=Path(os.getenv("GO_DATA",str(DEFAULT_DATA))).resolve(); self.commit=os.getenv("GO_COMMIT","unknown")
+        self.tree=os.getenv("GO_TREE_SHA","unknown"); self.environment=os.getenv("GO_ENV","local")
     def validate(self) -> None:
-        if self.port<0 or self.port>65535: raise ValueError("PARADISE_PORT must be 0..65535")
-        if not self.allow_anonymous and not self.api_token: raise ValueError("PARADISE_API_TOKEN is required unless anonymous mode is explicitly enabled")
+        if self.port<0 or self.port>65535: raise ValueError("GO_PORT must be 0..65535")
+        if not self.allow_anonymous and not self.api_token: raise ValueError("GO_API_TOKEN is required unless anonymous mode is explicitly enabled")
 
-class ParadiseApplication:
-    """PARADISE runtime. TaskContract owns intent; Submission owns submitted work; DurableExecution owns execution state."""
+class GOApplication:
+    """GO runtime. TaskContract owns intent; Submission owns submitted work; DurableExecution owns execution state."""
     def __init__(self, config: RuntimeConfig):
         config.validate(); self.config=config
         from .store import RuntimeStore
@@ -51,13 +51,13 @@ class ParadiseApplication:
 
 
     def status(self)->dict[str,Any]:
-        return {"name":"PARADISE","version":VERSION,"status":"RUNNING","host":socket.gethostname(),"commit":self.config.commit,"tree":self.config.tree,"environment":self.config.environment,"data_path":str(self.config.data_path),"started_at":self.store.get_meta("started_at"),"operations":["echo"],"integration":"LOVE_COGNITIVE_SUBSTRATE"}
+        return {"name":"GO","version":VERSION,"status":"RUNNING","host":socket.gethostname(),"commit":self.config.commit,"tree":self.config.tree,"environment":self.config.environment,"data_path":str(self.config.data_path),"started_at":self.store.get_meta("started_at"),"operations":["echo"],"integration":"LOVE_COGNITIVE_SUBSTRATE"}
 
     def execute(self, task_id:str, operation:str, payload:dict[str,Any])->dict[str,Any]:
-        request=__import__("runtime.paradise.contracts",fromlist=["CognitiveRequest"]).CognitiveRequest(task_id,operation,payload,self.config.commit,self.config.tree,self.config.environment)
+        request=__import__("runtime.go_runtime.core.contracts",fromlist=["CognitiveRequest"]).CognitiveRequest(task_id,operation,payload,self.config.commit,self.config.tree,self.config.environment)
         advice=self.cognitive.advise(request); self.cognitive.authorize(task_id,operation); output=self.cognitive.invoke_model(task_id,operation,payload)
         evidence=self.cognitive.emit_evidence(task_id,"MODEL_EXECUTION","model execution completed")
-        candidate = __import__("runtime.paradise_kernel", fromlist=["Evidence"]).Evidence(
+        candidate = __import__("runtime.go_kernel", fromlist=["Evidence"]).Evidence(
             evidence["evidence_id"], task_id, "runtime", evidence["source"],
             datetime.fromisoformat(evidence["captured_at"]), evidence["provenance"],
             evidence["integrity"], evidence["verification_status"], evidence["claim"]
@@ -103,9 +103,9 @@ class ParadiseApplication:
             return final
 
 class Handler(BaseHTTPRequestHandler):
-    server_version="PARADISE/0.1"
+    server_version="GO/1.0"
     @property
-    def app(self)->ParadiseApplication: return self.server.app # type: ignore[attr-defined]
+    def app(self)->GOApplication: return self.server.app # type: ignore[attr-defined]
     def _json(self,status:int,payload:dict[str,Any])->None:
         encoded=json.dumps(payload,ensure_ascii=False,sort_keys=True).encode("utf-8"); self.send_response(status); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Content-Length",str(len(encoded))); self.send_header("Cache-Control","no-store"); self.end_headers(); self.wfile.write(encoded)
     def _authorized(self)->bool:
@@ -129,14 +129,14 @@ class Handler(BaseHTTPRequestHandler):
         try: task=self.app.submit(self._body())
         except (ValueError,json.JSONDecodeError,TaskContractError,DurableExecutionError) as exc: self._json(HTTPStatus.BAD_REQUEST,{"error":str(exc)}); return
         status=HTTPStatus.OK if task.get("state")=="COMPLETED" else HTTPStatus.UNPROCESSABLE_ENTITY; self._json(status,task)
-    def log_message(self,format:str,*args:Any)->None: sys.stderr.write("PARADISE "+(format%args))
+    def log_message(self,format:str,*args:Any)->None: sys.stderr.write("GO "+(format%args))
 
 def create_server(config:RuntimeConfig|None=None)->ThreadingHTTPServer:
-    config=config or RuntimeConfig(); app=ParadiseApplication(config); server=ThreadingHTTPServer((config.host,config.port),Handler); server.app=app  # type: ignore[attr-defined]
+    config=config or RuntimeConfig(); app=GOApplication(config); server=ThreadingHTTPServer((config.host,config.port),Handler); server.app=app  # type: ignore[attr-defined]
     return server
 
 def main()->int:
-    config=RuntimeConfig(); server=create_server(config); print(f"PARADISE {VERSION} listening on http://{config.host}:{config.port}")
+    config=RuntimeConfig(); server=create_server(config); print(f"GO {VERSION} listening on http://{config.host}:{config.port}")
     try: server.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt: pass
     finally: server.server_close()

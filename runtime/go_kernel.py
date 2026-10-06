@@ -1,4 +1,4 @@
-﻿"""Minimal PARADISE kernel implementation for semantic kernel V1."""
+"""Minimal GO kernel implementation for semantic kernel V1."""
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -138,7 +138,7 @@ class ChangeRequest:
 
 @dataclass
 class Kernel:
-    """Enforcement facade for PARADISE semantic kernel V1."""
+    """Enforcement facade for GO semantic kernel V1."""
     trusted_evidence_sources: FrozenSet[str] = frozenset()
     consumed_executions: set[str] = field(default_factory=set)
 
