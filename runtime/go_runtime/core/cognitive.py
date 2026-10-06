@@ -31,30 +31,50 @@ class CognitiveService:
     def _now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
 
+    MEMORY_RETRIEVAL_LIMIT = 5
+
+    def _parse_memory(self, raw: dict[str, Any]) -> MemoryRecord | None:
+        try:
+            return MemoryRecord(
+                **{**raw, "trust_status": MemoryTrustStatus(raw["trust_status"]),
+                   "evidence_refs": tuple(raw.get("evidence_refs", [])),
+                   "supersedes": tuple(raw.get("supersedes", [])),
+                   "refutes": tuple(raw.get("refutes", [])),
+                   "support_group_ids": tuple(raw.get("support_group_ids", []))})
+        except (KeyError, ValueError, TypeError):
+            return None
+
     def advise(self, request: CognitiveRequest) -> CognitiveAdvice:
+        """Bounded, ranked memory retrieval + closed learning loop (advisory only)."""
         payload = dict(request.payload)
         memory_ids: list[str] = []
         evidence_ids: list[str] = []
         memory_key = payload.get("memory_key")
         scope = str(payload.get("memory_scope", "conversation"))
         if memory_key:
-            records = self.store.load_memory(str(memory_key), scope)
-            parsed: list[MemoryRecord] = []
-            for raw in records:
-                try:
-                    parsed.append(MemoryRecord(
-                        **{**raw, "trust_status": MemoryTrustStatus(raw["trust_status"]),
-                           "evidence_refs": tuple(raw.get("evidence_refs", [])),
-                           "supersedes": tuple(raw.get("supersedes", [])),
-                           "refutes": tuple(raw.get("refutes", [])),
-                           "support_group_ids": tuple(raw.get("support_group_ids", []))}))
-                except (KeyError, ValueError, TypeError):
-                    continue
+            parsed = [m for m in (self._parse_memory(r) for r in self.store.load_memory(str(memory_key), scope)) if m]
             resolved = self.memory.resolve(parsed, str(memory_key), scope) if parsed else None
             if resolved and resolved.trust_status in {MemoryTrustStatus.VERIFIED, MemoryTrustStatus.QUALIFIED}:
                 memory_ids.append(resolved.memory_id)
                 evidence_ids.extend(resolved.evidence_refs)
-        return CognitiveAdvice(request.task_id, "use_verified_context_only", tuple(memory_ids), tuple(evidence_ids))
+            eligible = [m for m in parsed if m.trust_status in {MemoryTrustStatus.VERIFIED, MemoryTrustStatus.QUALIFIED}]
+            eligible.sort(key=lambda m: (m.trust_status is MemoryTrustStatus.VERIFIED, m.confidence, m.observed_at), reverse=True)
+            for record in eligible:
+                if len(memory_ids) >= self.MEMORY_RETRIEVAL_LIMIT:
+                    break
+                if record.memory_id in memory_ids:
+                    continue
+                memory_ids.append(record.memory_id)
+                evidence_ids.extend(record.evidence_refs)
+        recommendation = "use_verified_context_only"
+        try:
+            hint = self.learning_hint()
+            recs = [str(x) for x in (hint.get("recommendations") or []) if str(x).strip()][:3]
+            if recs:
+                recommendation = recommendation + "; learn: " + "; ".join(recs)
+        except Exception:
+            pass
+        return CognitiveAdvice(request.task_id, recommendation, tuple(dict.fromkeys(memory_ids)), tuple(dict.fromkeys(evidence_ids)))
 
     def authorize(self, task_id: str, operation: str) -> str:
         now = datetime.now(timezone.utc)
@@ -71,8 +91,17 @@ class CognitiveService:
 
     def _route(self, task_id: str) -> tuple[str, str, dict[str, Any]]:
         observations = self.store.list_learning_observations()
-        routed = select_provider_from_performance("reasoning", "local", observations)
-        return str(routed["provider"]), "local.echo.v1", routed
+        routed = select_provider_from_performance("reasoning", self.models.default_provider, observations)
+        provider = str(routed.get("provider") or self.models.default_provider)
+        model = self.models.default_model
+        if provider != self.models.default_provider:
+            for obs in observations:
+                if obs.get("provider_id") == provider and obs.get("model_id"):
+                    model = str(obs["model_id"])
+                    break
+        if not self.models.has(provider, model):
+            provider, model = self.models.default_provider, self.models.default_model
+        return provider, model, routed
 
     def invoke_model(self, task_id: str, operation: str, payload: dict[str, Any]) -> dict[str, Any]:
         provider, model, routing = self._route(task_id)
