@@ -55,7 +55,11 @@ class GOApplication:
 
     def execute(self, task_id:str, operation:str, payload:dict[str,Any])->dict[str,Any]:
         request=__import__("runtime.go_runtime.core.contracts",fromlist=["CognitiveRequest"]).CognitiveRequest(task_id,operation,payload,self.config.commit,self.config.tree,self.config.environment)
-        advice=self.cognitive.advise(request); self.cognitive.authorize(task_id,operation); output=self.cognitive.invoke_model(task_id,operation,payload)
+        advice=self.cognitive.advise(request); self.cognitive.authorize(task_id,operation)
+        context=self.cognitive.reasoning_context(advice)
+        model_payload=dict(payload)
+        if context: model_payload["go_context"]=context
+        output=self.cognitive.invoke_model(task_id,operation,model_payload)
         evidence=self.cognitive.emit_evidence(task_id,"MODEL_EXECUTION","model execution completed")
         candidate = __import__("runtime.go_kernel", fromlist=["Evidence"]).Evidence(
             evidence["evidence_id"], task_id, "runtime", evidence["source"],
@@ -69,7 +73,7 @@ class GOApplication:
         self.store.save_evidence(evidence, evidence["captured_at"])
         replay=self.cognitive.emit_replay(task_id,"MODEL_EXECUTION",{"operation":operation,"output":output,"evidence_id":evidence["evidence_id"]})
         memory=self.cognitive.observe_memory(task_id,payload,evidence["evidence_id"])
-        result={**output,"task_id":task_id,"cognitive":{"advice":advice.recommendation,"memory_ids":list(advice.memory_ids),"evidence_ids":list(advice.evidence_ids)},"evidence_id":evidence["evidence_id"],"replay_id":replay["replay_id"]}
+        result={**output,"task_id":task_id,"cognitive":{"advice":advice.recommendation,"memory_ids":list(advice.memory_ids),"evidence_ids":list(advice.evidence_ids),"context_used":bool(context),"go_context":context},"evidence_id":evidence["evidence_id"],"replay_id":replay["replay_id"]}
         if memory: result.update({"memory_id":memory["memory_id"],"memory_key":memory["normalized_key"],"memory_scope":memory["scope"]})
         learning_artifact=self.cognitive.build_learning_artifact(task_id,result)
         result["learning_artifact_id"]=learning_artifact["artifact_id"]

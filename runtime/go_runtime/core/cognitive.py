@@ -9,9 +9,8 @@ from typing import Any
 from .engine.memory_trust import (
     MemoryCore, MemoryRecord, MemoryTrustStatus, TrustCertificate, memory_artifact_digest,
 )
-from .engine.learning import (
-    build_knowledge_hint, build_learning_artifact_v3, compute_learning, compute_metrics, select_provider_from_performance,
-)
+from .engine.learning import build_learning_artifact_v3, select_provider_from_performance
+from .engine.go_learning import build_go_hint, compute_go_learning
 from runtime.go_kernel import Authority, Evidence, GateResult, Kernel
 from .contracts import CognitiveAdvice, CognitiveRequest, ModelRequest
 from .model_gateway import ModelGateway
@@ -266,9 +265,14 @@ class CognitiveService:
         return artifact
 
     def learning_hint(self) -> dict[str, Any]:
-        tasks = self.store.list_tasks()
-        task_view = [{"state": "COMPLETED" if t["status"] == "SUCCEEDED" else "FAILED",
-                      "report": {"result": t.get("result") or {}}} for t in tasks]
-        metrics = compute_metrics(task_view, [])
-        learning = compute_learning(task_view, [], metrics)
-        return build_knowledge_hint(learning, metrics)
+        """GO-native learning hint (no media branches); advisory only."""
+        return build_go_hint(compute_go_learning(self.store.list_tasks()))
+
+    def reasoning_context(self, advice: CognitiveAdvice) -> str:
+        """Bounded context from memory + learning to feed the reasoning request."""
+        parts: list[str] = []
+        if advice.memory_ids:
+            parts.append("memory:" + ",".join(advice.memory_ids))
+        if advice.recommendation and advice.recommendation != "use_verified_context_only":
+            parts.append(advice.recommendation)
+        return "; ".join(parts)[:500]
