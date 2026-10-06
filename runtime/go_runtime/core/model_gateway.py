@@ -4,30 +4,57 @@ Default stays the deterministic local echo adapter so bounded `echo` execution
 is unchanged. A real OpenAI-compatible reasoning provider can be registered via
 environment (GO_MODEL_*), exposed as the reasoning target for non-echo
 operations, without becoming a state/policy/evidence owner.
+
+Plugin Contract V1 is metadata on the existing ProviderAdapter boundary. It does
+not introduce a second registry, lifecycle owner, or execution authority.
 """
 from __future__ import annotations
 import json
 import os
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
 
 from .contracts import ModelRequest, ModelResult
 
+PLUGIN_CONTRACT_VERSION = "PLUGIN-CONTRACT-V1"
+PLUGIN_EXTENSION_POINT = "model.provider"
 
 @dataclass
 class ProviderAdapter:
     provider_id: str
     model_id: str
+    plugin_id: str = ""
+    plugin_version: str = "1.0.0"
+    contract_version: str = PLUGIN_CONTRACT_VERSION
+    extension_point: str = PLUGIN_EXTENSION_POINT
+    supported_operations: tuple[str, ...] = field(default_factory=tuple)
+    source: str = "runtime.go_runtime.core.model_gateway"
+    provenance: str = "GO_RUNTIME_CANONICAL"
+
+    def validate_contract(self) -> None:
+        if not self.provider_id.strip() or not self.model_id.strip():
+            raise ValueError("provider_id and model_id are required")
+        if not self.plugin_id.strip():
+            raise ValueError("plugin_id is required")
+        if not self.plugin_version.strip():
+            raise ValueError("plugin_version is required")
+        if self.contract_version != PLUGIN_CONTRACT_VERSION:
+            raise ValueError("unsupported plugin contract version")
+        if self.extension_point != PLUGIN_EXTENSION_POINT:
+            raise ValueError("unsupported plugin extension point")
+        if not self.supported_operations or any(not op.strip() for op in self.supported_operations):
+            raise ValueError("supported_operations is required")
+        if not self.source.strip() or not self.provenance.strip():
+            raise ValueError("source and provenance are required")
 
     def invoke(self, request: ModelRequest) -> ModelResult:
         raise NotImplementedError
 
-
 class EchoAdapter(ProviderAdapter):
     def __init__(self) -> None:
-        super().__init__("local", "local.echo.v1")
+        super().__init__("local", "local.echo.v1",
+                     plugin_id="go.local.echo", supported_operations=("echo",))
 
     def invoke(self, request: ModelRequest) -> ModelResult:
         if request.operation != "echo":
@@ -40,12 +67,12 @@ class EchoAdapter(ProviderAdapter):
         return ModelResult(self.provider_id, self.model_id,
                            {"echo": message, "task_id": request.task_id}, True)
 
-
 class OpenAICompatibleAdapter(ProviderAdapter):
     """Real model provider behind an OpenAI-compatible /chat/completions API."""
-
     def __init__(self, provider_id: str, model_id: str, base_url: str, api_key: str, timeout: int = 60) -> None:
-        super().__init__(provider_id, model_id)
+        super().__init__(provider_id, model_id,
+                         plugin_id=f"go.{provider_id}.openai-compatible",
+                         supported_operations=("ask", "echo"))
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
@@ -75,10 +102,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             raise ValueError("provider malformed response") from None
         return ModelResult(self.provider_id, self.model_id, {"text": text, "task_id": request.task_id}, True)
 
-
 class ModelGateway:
     """Single execution boundary for model calls. Registry + reasoning target."""
-
     def __init__(self) -> None:
         self._adapters: dict[tuple[str, str], ProviderAdapter] = {}
         echo = EchoAdapter()
@@ -97,6 +122,9 @@ class ModelGateway:
             self.reasoning_model = mid
 
     def register(self, adapter: ProviderAdapter) -> None:
+        if not isinstance(adapter, ProviderAdapter):
+            raise TypeError("adapter must be a ProviderAdapter")
+        adapter.validate_contract()
         self._adapters[(adapter.provider_id, adapter.model_id)] = adapter
 
     def has(self, provider: str, model: str) -> bool:
