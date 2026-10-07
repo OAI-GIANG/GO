@@ -1,0 +1,79 @@
+{
+  "acceptance": {
+    "final_regression": "PASS",
+    "identity_binding": "PASS",
+    "production_activation": "BLOCKED_NOT_DEPLOYED",
+    "production_tvs_gate": "PASS",
+    "release_ready": false,
+    "root_provisioned": "PASS",
+    "signature_verification": "PASS",
+    "signed_release_tag": "PASS"
+  },
+  "canonical": {
+    "branch": "hg-core",
+    "commit_sha": "4346afdb775e68e7f1499896920a894b8a6e6878",
+    "repository": "OAI-GIANG/GO"
+  },
+  "deployment_boundary": {
+    "canonical_head_modified": false,
+    "go_runtime_service_on_vps2": "NOT_PRESENT",
+    "merge_to_hg_core": false,
+    "production_deployment": false,
+    "runtime_restart": false
+  },
+  "external_runtime_trust": {
+    "config_path": "/root/.config/hg/tvs/runtime.env",
+    "config_sha256": "8d60ea50e93e0fcb843ee013acec661361f004299f5f7b1934fc6c9dfe1fb6c3",
+    "fingerprint_matches": true,
+    "repository_matches": true,
+    "tag": "HG-TVS-V2-20261007"
+  },
+  "integrity": {
+    "artifact_sha256": "9f78e20337029c10810e542698138583813ca7dcc69ecf875e083158f3faf45b",
+    "hash_rule": "SHA-256 over canonical JSON bytes excluding integrity"
+  },
+  "production_root": {
+    "fingerprint": "20318888BFEDD406A36E16F211E8CBEF6DC15DD7",
+    "private_key_in_repository": false,
+    "provisioned_outside_source_tree": true,
+    "public_key_sha256": "025fc3d39825f78aa5dd90fbc1c31f074a2855c25527684ee8a14a5a29cc9fb2",
+    "type": "OPENPGP",
+    "vps2_gnupg_home": "/root/.config/hg/tvs/gnupg"
+  },
+  "provenance": {
+    "authorization": "USER_EXPLICIT_FULL_EXECUTION_AUTHORIZATION_2026-10-07",
+    "created_by": "STT_ORCHESTRATOR_AUDITOR",
+    "private_key_embedded": false,
+    "secrets_embedded": false
+  },
+  "regression": {
+    "exact_signed_tag_tree_pytest": "72 passed",
+    "v3_e2e": "BLOCKED_AT_EDGE_AUTH",
+    "v3_production_ready": false,
+    "vps2_connection": "VERIFIED",
+    "vps2_exact_signed_tag_pytest": "72 passed"
+  },
+  "release": {
+    "remote_tag_verified": true,
+    "runtime_version": "0.1.1",
+    "tag": "HG-TVS-V2-20261007",
+    "tag_object_sha": "8088168a713e764ffef57096806f0af78b20873d",
+    "target_commit_sha": "4ec612f81c1fdeab16a31d9379333c7da8416428",
+    "target_tree_sha": "b89f8a4fd8da794558d4380ff58ea13e0c9e4ed8",
+    "tvs_id": "6eb8803859d755456488b4d6100577d6cdc4b330f9896b61da68be7b05a82c51"
+  },
+  "schema": "HG_TVS_PRODUCTION_AUTHORITY_CLOSURE_V1",
+  "status": "PRODUCTION_TVS_AUTHORITY_VERIFIED_ACTIVATION_BLOCKED_NO_DEPLOYMENT",
+  "verification": {
+    "annotated_tag_verified": true,
+    "commit_verified": true,
+    "go_runtime_tvs_gate": "PASS",
+    "production_tvs_gate": "PASS",
+    "runtime_version_verified": true,
+    "signer_fingerprint_verified": true,
+    "tag_target_verified": true,
+    "tree_verified": true,
+    "tvs_id_verified": true,
+    "vps2_real_signed_tag": "VERIFIED"
+  }
+}
