@@ -239,6 +239,58 @@ class Kernel:
     def change_allowed(self, change: ChangeRequest) -> GateResult:
         return GateResult.ALLOW if change.bounded() else GateResult.DENY
 
+    def evaluate_resume(self, checkpoint: dict, task: dict|None, repository: dict|None, evidence_records: list[dict], replay_records: list[dict]):
+        from runtime.go_runtime.core.checkpoint import sha256_canonical
+        from runtime.go_runtime.core.contracts import ResumeDecision
+        ident=checkpoint.get("identity",{}); cid=str(ident.get("checkpoint_id","")); tid=str(ident.get("task_id","")); rev=int(ident.get("checkpoint_revision",0) or 0)
+        def block(code): return ResumeDecision("BLOCKED",code,cid,tid,rev)
+        s=checkpoint.get("schema",{})
+        if s.get("name")!="HG_MODEL_CONTEXT_INDEPENDENCE_CHECKPOINT" or s.get("version")!="1.0": return block("CHECKPOINT_SCHEMA_UNSUPPORTED")
+        expected=checkpoint.get("canonical_payload_hash",""); payload=dict(checkpoint)
+        for k in ("canonical_payload_hash","integrity_algorithm","replay_sequence","replay_digest"): payload.pop(k,None)
+        if not expected or sha256_canonical(payload)!=expected: return block("CHECKPOINT_INTEGRITY_INVALID")
+        if task is None or task.get("id",task.get("task_id"))!=tid: return block("TASK_IDENTITY_MISMATCH")
+        if task.get("state") not in {"QUEUED","RUNNING","RECOVERING","RECOVERY_PENDING"}: return block("TASK_STATE_NOT_RECOVERABLE")
+        c=checkpoint.get("contract",{}); current=(task.get("metadata") or {}).get("_contract_hash") or (task.get("metadata") or {}).get("contract_hash")
+        if not current: return block("CONTRACT_IDENTITY_MISSING")
+        if current!=c.get("contract_hash"): return block("CONTRACT_HASH_MISMATCH")
+        if c.get("contract_version")!="1.0": return block("CONTRACT_VERSION_UNSUPPORTED")
+        witness=checkpoint.get("repository",{}); current_repo=repository or {}
+        if not current_repo: return block("PROVENANCE_INVALID")
+        for f,code in (("canonical_head","CANONICAL_HEAD_MISMATCH"),("observed_head","OBSERVED_HEAD_MISMATCH"),("observed_tree","OBSERVED_TREE_MISMATCH")):
+            if not witness.get(f) or current_repo.get(f)!=witness.get(f): return block(code)
+        if witness.get("provenance_status") not in {"VERIFIED","VALID"}: return block("PROVENANCE_INVALID")
+        if witness.get("witness_mode")=="GIT_CHECKOUT" and witness.get("local_dirty") is None: return block("PROVENANCE_INVALID")
+        emap={str(e.get("evidence_id")):e for e in evidence_records}
+        refs=checkpoint.get("evidence",{}).get("refs",[])
+        for r in refs:
+            e=emap.get(str(r.get("evidence_id")))
+            if e is None: return block("EVIDENCE_REFERENCE_MISSING")
+            if (e.get("integrity") or e.get("evidence_digest"))!=r.get("evidence_digest"): return block("EVIDENCE_DIGEST_MISMATCH")
+            if e.get("verification_status")!="VERIFIED" or r.get("verification_status")!="VERIFIED": return block("EVIDENCE_VERIFICATION_INSUFFICIENT")
+        manifest=checkpoint.get("evidence",{}); refs_payload=sorted([{"evidence_id":r.get("evidence_id"),"evidence_digest":r.get("evidence_digest"),"verification_status":r.get("verification_status")} for r in refs],key=lambda x:x["evidence_id"])
+        if manifest.get("manifest_digest")!=sha256_canonical(refs_payload): return block("EVIDENCE_MANIFEST_MISMATCH")
+        if any(bool(b.get("blocking")) for b in checkpoint.get("blockers",[])): return block("BLOCKER_ACTIVE")
+        acceptance=checkpoint.get("acceptance",{})
+        if acceptance.get("aggregate_status")!="PASS" or any(c.get("status")!="PASS" for c in acceptance.get("criteria",[])): return block("ACCEPTANCE_STATE_INVALID")
+        na=checkpoint.get("next_action",{})
+        if not na.get("instruction"): return block("NEXT_ACTION_MISSING")
+        if na.get("deterministic") is not True: return block("NEXT_ACTION_NONDETERMINISTIC")
+        seq=int(checkpoint.get("replay_sequence",0) or 0); digest=checkpoint.get("replay_digest","")
+        if seq<1 or not digest: return block("REPLAY_INTEGRITY_INVALID")
+        previous="GENESIS"
+        ordered=sorted(replay_records,key=lambda r:int(r.get("sequence",0)))
+        for i,r in enumerate(ordered,1):
+            if int(r.get("sequence",0))!=i or r.get("previous_digest")!=previous: return block("REPLAY_INTEGRITY_INVALID")
+            rp={"replay_id":r.get("replay_id"),"task_id":r.get("task_id"),"sequence":int(r.get("sequence")),"event_type":r.get("event_type"),"payload":r.get("payload",{}),"previous_digest":r.get("previous_digest"),"occurred_at":r.get("occurred_at")}
+            if sha256_canonical(rp)!=r.get("record_digest"): return block("REPLAY_INTEGRITY_INVALID")
+            previous=r.get("record_digest")
+        if seq>len(ordered) or previous!=digest: return block("REPLAY_INTEGRITY_INVALID")
+        matches=[r for r in ordered if r.get("event_type")=="CHECKPOINT_CREATED" and r.get("payload",{}).get("checkpoint_id")==cid]
+        if not matches or matches[-1].get("payload",{}).get("checkpoint_hash")!=expected: return block("INTEGRITY_CONFLICT")
+        if checkpoint.get("resume",{}).get("model_context_required") is True: return block("INTEGRITY_CONFLICT")
+        return ResumeDecision("ALLOW","RESUME_ALLOWED",cid,tid,rev)
+
 # Directive compliance is a policy composition over existing P1-P5 primitives.
 # It intentionally uses a mapping rather than introducing a new semantic primitive.
 def _directive_compliance(self, directive: dict, execution: Execution, evidence_items: list[Evidence], at: Optional[datetime] = None) -> tuple[GateResult, str]:
