@@ -16,6 +16,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .task_contract import Submission
+from ..checkpoint import (
+    AcceptanceCriterion,AcceptanceSnapshot,Blocker,Checkpoint,CheckpointIdentity,CheckpointSchema,
+    ContractBinding,EvidenceManifest,EvidenceReference,NextAction,RepositoryWitness,ResumeState,sha256_canonical
+)
 
 
 TERMINAL_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT", "ABORTED_BY_KILL"}
@@ -239,6 +243,70 @@ class DurableExecution:
                 task["error"] = error
             self.store.upsert_task(task)
             return self.store.task_by_id(task_id) or dict(task)
+
+    def emit_replay(self, task_id: str, event_type: str, payload: dict[str,Any], now: str|None=None)->dict[str,Any]:
+        now=now or now_iso(); records=self.store.list_replay(task_id); seq=len(records)+1; prev=records[-1]["record_digest"] if records else "GENESIS"
+        r={"replay_id":f"RPL-{uuid.uuid4().hex}","task_id":task_id,"sequence":seq,"event_type":event_type,"payload":payload,"previous_digest":prev,"occurred_at":now}
+        r["record_digest"]=sha256_canonical(r); self.store.save_replay(r,now); return r
+
+    def verify_replay(self, task_id: str)->bool:
+        prev="GENESIS"
+        for i,r in enumerate(self.store.list_replay(task_id),1):
+            if int(r.get("sequence",0))!=i or r.get("previous_digest")!=prev: return False
+            rp={"replay_id":r.get("replay_id"),"task_id":r.get("task_id"),"sequence":int(r.get("sequence")),"event_type":r.get("event_type"),"payload":r.get("payload",{}),"previous_digest":r.get("previous_digest"),"occurred_at":r.get("occurred_at")}
+            if sha256_canonical(rp)!=r.get("record_digest"): return False
+            prev=r.get("record_digest")
+        return True
+
+    def create_checkpoint(self, task_id: str, *, repository: dict[str,Any], contract: Any, phase: str,
+                          acceptance: dict[str,Any], evidence: list[dict[str,Any]], blockers: list[dict[str,Any]],
+                          next_action: dict[str,Any], resume: dict[str,Any]|None=None, source_runtime: str="go_runtime",
+                          created_at: str|None=None)->dict[str,Any]:
+        task=self.store.task_by_id(task_id)
+        if task is None: raise DurableExecutionError("task_not_found")
+        created_at=created_at or now_iso()
+        latest=self.store.get_latest_checkpoint(task_id); rev=(latest or {}).get("identity",{}).get("checkpoint_revision",0)+1
+        cid=f"CHK-{uuid.uuid4().hex}"
+        ch=getattr(contract,"contract_hash",None) or (contract.get("contract_hash") if isinstance(contract,dict) else None) or (task.get("metadata") or {}).get("_contract_hash")
+        if not ch: raise DurableExecutionError("contract_hash_required")
+        cn=getattr(contract,"contract_name","LOVE_TASK_CONTRACT"); cv=getattr(contract,"contract_version","1.0")
+        refs=tuple(EvidenceReference(str(e["evidence_id"]),str(e.get("evidence_digest") or e.get("integrity") or ""),str(e.get("verification_status","UNVERIFIED"))) for e in evidence)
+        refs_payload=sorted([{"evidence_id":r.evidence_id,"evidence_digest":r.evidence_digest,"verification_status":r.verification_status} for r in refs],key=lambda x:x["evidence_id"])
+        manifest=EvidenceManifest(refs,sha256_canonical(refs_payload))
+        ac=AcceptanceSnapshot(tuple(AcceptanceCriterion(str(c["id"]),str(c["statement"]),str(c.get("status","UNTESTED"))) for c in acceptance.get("criteria",[])),str(acceptance.get("aggregate_status","UNTESTED")))
+        bl=tuple(Blocker(str(b["blocker_id"]),str(b["code"]),str(b["description"]),bool(b.get("blocking",True)),str(b.get("unblock_condition",""))) for b in blockers)
+        na=NextAction(str(next_action["action_id"]),str(next_action["action_type"]),str(next_action["instruction"]),tuple(next_action.get("prerequisites",())),bool(next_action.get("deterministic",True)))
+        rs=ResumeState(bool((resume or {}).get("eligible",False)),str((resume or {}).get("reason_code","")),tuple((resume or {}).get("required_context_refs",())),bool((resume or {}).get("model_context_required",False)))
+        rw=RepositoryWitness(remote=repository.get("remote",""),branch=repository.get("branch",""),canonical_head=repository.get("canonical_head",""),observed_head=repository.get("observed_head",""),observed_tree=repository.get("observed_tree",""),local_dirty=repository.get("local_dirty"),provenance_status=repository.get("provenance_status","UNVERIFIED"),witness_mode=repository.get("witness_mode","REMOTE_RUNTIME"))
+        cp=Checkpoint(CheckpointIdentity(cid,task_id,rev),CheckpointSchema(),created_at,source_runtime,rw,ContractBinding(cn,cv,ch,"VALID"),
+                      str(task.get("goal","")),str(task.get("operation","")),str(task.get("execution_mode","")),str(task.get("state","")),
+                      int(task.get("revision",0)),int(task.get("attempt_no",0)),task.get("run_id"),task.get("attempt_id"),phase,ac,manifest,bl,na,rs)
+        h=cp.computed_hash(); records=self.store.list_replay(task_id); seq=len(records)+1; prev=records[-1]["record_digest"] if records else "GENESIS"
+        replay={"replay_id":f"RPL-{uuid.uuid4().hex}","task_id":task_id,"sequence":seq,"event_type":"CHECKPOINT_CREATED","payload":{"checkpoint_id":cid,"checkpoint_revision":rev,"checkpoint_hash":h},"previous_digest":prev,"occurred_at":created_at}
+        replay["record_digest"]=sha256_canonical(replay)
+        cp=Checkpoint(**{**cp.__dict__,"replay_sequence":seq,"replay_digest":replay["record_digest"],"canonical_payload_hash":h}).validated()
+        self.store.save_checkpoint_with_replay(cp.to_dict(),replay,created_at); return cp.to_dict()
+
+    def load_checkpoint(self, task_id: str, checkpoint_id: str|None=None)->dict[str,Any]|None:
+        cp=self.store.get_checkpoint(checkpoint_id) if checkpoint_id else self.store.get_latest_checkpoint(task_id)
+        return cp if cp and cp["identity"]["task_id"]==task_id else None
+
+    def evaluate_resume(self, task_id: str, checkpoint_id: str|None=None, *, repository_witness: dict[str,Any]|None=None):
+        from runtime.go_kernel import Kernel
+        from runtime.go_runtime.core.contracts import ResumeDecision
+        cp=self.load_checkpoint(task_id,checkpoint_id)
+        if cp is None: return ResumeDecision("BLOCKED","CHECKPOINT_INTEGRITY_INVALID",checkpoint_id or "",task_id,0)
+        task=self.store.task_by_id(task_id); repo=repository_witness or (task.get("provenance") if task else {})
+        return Kernel().evaluate_resume(cp,task,repo,self.store.list_evidence(task_id),self.store.list_replay(task_id))
+
+    def resume(self, task_id: str, checkpoint_id: str|None=None, *, repository_witness: dict[str,Any]|None=None)->dict[str,Any]:
+        d=self.evaluate_resume(task_id,checkpoint_id,repository_witness=repository_witness)
+        if d.decision!="ALLOW": raise DurableExecutionError(f"resume_blocked:{d.reason_code}")
+        task=self.store.task_by_id(task_id)
+        if task is None: raise DurableExecutionError("task_not_found")
+        if task.get("state") in {"FAILED","RECOVERY_PENDING"}: return self.request_recovery(task_id,reason="checkpoint_resume")
+        if task.get("state") in {"QUEUED","RECOVERING"}: return task
+        raise DurableExecutionError("resume_requires_recovery_fence")
 
     def request_recovery(self, task_id: str, *, reason: str = "manual_recovery") -> dict:
         """Move one failed/orphaned task into the canonical recovery path."""

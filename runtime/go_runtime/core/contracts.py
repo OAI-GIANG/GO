@@ -55,3 +55,25 @@ class ReplayEnvelope:
     payload: Mapping[str, Any]
     previous_digest: str
     record_digest: str
+
+
+
+@dataclass(frozen=True)
+class CheckpointEnvelope:
+    checkpoint_id: str
+    task_id: str
+    checkpoint_revision: int
+    canonical_payload_hash: str
+
+@dataclass(frozen=True)
+class ResumeRequest:
+    task_id: str
+    checkpoint_id: str
+
+@dataclass(frozen=True)
+class ResumeDecision:
+    decision: str
+    reason_code: str
+    checkpoint_id: str
+    task_id: str
+    checkpoint_revision: int

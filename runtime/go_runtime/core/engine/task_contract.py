@@ -12,6 +12,8 @@ import json
 from typing import Any, Mapping
 from types import MappingProxyType
 
+from ..checkpoint import canonical_json
+
 
 class TaskContractError(ValueError):
     pass
@@ -38,6 +40,14 @@ class TaskContract:
             raise TaskContractError("goal_required")
         return self
 
+    def canonical_payload(self) -> dict[str, Any]:
+        self.validate()
+        return {"schema_version":"LOVE-TASK-CONTRACT-1.0","contract_name":"LOVE_TASK_CONTRACT","contract_version":"1.0","goal":self.goal,"metadata":dict(self.metadata)}
+
+    @property
+    def contract_hash(self) -> str:
+        return sha256(canonical_json(self.canonical_payload()).encode("utf-8")).hexdigest()
+
     def submit(
         self,
         *,
@@ -49,14 +59,11 @@ class TaskContract:
         metadata: Mapping[str, Any] | None = None,
     ) -> "Submission":
         self.validate()
+        submission_metadata={**self.metadata,**dict(metadata or {}),"_contract_name":"LOVE_TASK_CONTRACT","_contract_version":"1.0","_contract_hash":self.contract_hash}
         return Submission(
-            submission_id=submission_id,
-            goal=self.goal,
-            idempotency_key=idempotency_key,
-            idempotency_scope=idempotency_scope,
-            delay_s=delay_s,
-            execution_mode=execution_mode,
-            metadata={**self.metadata, **dict(metadata or {})},
+            submission_id=submission_id, goal=self.goal, idempotency_key=idempotency_key,
+            idempotency_scope=idempotency_scope, delay_s=delay_s, execution_mode=execution_mode,
+            metadata=submission_metadata,
         ).validate()
 
 
