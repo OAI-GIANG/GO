@@ -89,10 +89,80 @@ def test_runtime_binding_n11_non_read_only_operation_rejects():
     assert exc.value.reason_code == "NON_READ_ONLY_OPERATION"
 
 
-def test_runtime_positive_gate_reaches_executor_boundary():
+@pytest.mark.parametrize("field", ["request_id", "target_id"])
+def test_runtime_binding_missing_required_field_rejects(field):
     app = configured_app()
-    os.environ["HG_DURABLE_URL"] = "http://127.0.0.1:9"
-    os.environ["HG_DURABLE_TOKEN"] = "not-a-real-token"
+    payload = request()
+    payload.pop(field)
+    with pytest.raises(BridgeReject) as exc:
+        app.execute_vps2(payload)
+    assert exc.value.reason_code == "REQUEST_BINDING_INVALID"
+    assert exc.value.decision is not None
+    assert exc.value.decision.decision == "DENY"
+    assert exc.value.decision.reason_code == "REQUEST_BINDING_INVALID"
+
+
+def test_runtime_rejection_evidence_is_complete():
+    bridge = VPS2ExecutionBridge(
+        target_id="vps-5ku1ry",
+        allowlist_version="AL-2026-10-07",
+        policy_version="POL-2026-10-07",
+        registry_version="VPS2-REGISTRY-V3",
+        templates={
+            "vps2.health": OperationTemplate("vps2.health", "/backend/health", True, ())
+        },
+    )
+    payload = BridgeRequest(
+        request_id="",
+        target_id="vps-5ku1ry",
+        operation_id="vps2.health",
+        allowlist_version="AL-2026-10-07",
+        policy_version="POL-2026-10-07",
+        variables={},
+    )
+    result = bridge.reject(payload)
+    assert result["state"] == "REJECTED"
+    assert result["decision"].decision == "DENY"
+    evidence = result["evidence"]
+    assert evidence["reason_code"] == "REQUEST_BINDING_INVALID"
+    assert evidence["authorization_decision_id"] == result["decision"].decision_id
+    assert evidence["execution_status"] == "REJECTED"
+    assert evidence["executing"] is False
+    assert "rejected_at" in evidence
+
+
+def test_runtime_success_evidence_contains_timestamps():
+    bridge = VPS2ExecutionBridge(
+        target_id="vps-5ku1ry",
+        allowlist_version="AL-2026-10-07",
+        policy_version="POL-2026-10-07",
+        registry_version="VPS2-REGISTRY-V3",
+        templates={
+            "vps2.health": OperationTemplate("vps2.health", "/backend/health", True, ())
+        },
+    )
+    payload = BridgeRequest(
+        request_id=str(uuid.uuid4()),
+        target_id="vps-5ku1ry",
+        operation_id="vps2.health",
+        allowlist_version="AL-2026-10-07",
+        policy_version="POL-2026-10-07",
+        variables={},
+    )
+    result = bridge.execute(payload, lambda template, variables: {"ok": True})
+    evidence = result["evidence"]
+    assert result["state"] == "CLOSED"
+    assert evidence["execution_status"] == "COMPLETED"
+    assert evidence["authorization_timestamp"] == result["decision"].timestamp
+    assert evidence["execution_started_at"]
+    assert evidence["evidence_emitted_at"]
+    assert evidence["closed_at"]
+
+
+def test_runtime_positive_gate_reaches_edge_executor_boundary():
+    app = configured_app()
+    os.environ["HG_EDGE_URL"] = "http://127.0.0.1:9"
+    os.environ["HG_EDGE_TOKEN"] = "not-a-real-token"
     with pytest.raises(Exception) as exc:
         app.execute_vps2(request())
     assert "VPS2" in str(exc.value) or type(exc.value).__name__ in {"URLError", "TimeoutError", "ConnectionRefusedError"}

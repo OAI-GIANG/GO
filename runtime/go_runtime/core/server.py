@@ -70,14 +70,22 @@ class GOApplication:
 
     def execute_vps2(self, body: dict[str, Any]) -> dict[str, Any]:
         bridge = self._vps2_bridge()
-        target = bridge._target_id
+
+        def required_string(name: str) -> str:
+            value = body.get(name)
+            return value.strip() if isinstance(value, str) else ""
+
+        variables = body.get("variables")
+        if variables is None:
+            variables = {}
+
         req = BridgeRequest(
-            request_id=str(body.get("request_id") or uuid.uuid4()),
-            target_id=str(body.get("target_id") or target),
-            operation_id=str(body.get("operation_id") or ""),
-            allowlist_version=str(body.get("allowlist_version") or ""),
-            policy_version=str(body.get("policy_version") or ""),
-            variables=dict(body.get("variables") or {}),
+            request_id=required_string("request_id"),
+            target_id=required_string("target_id"),
+            operation_id=required_string("operation_id"),
+            allowlist_version=required_string("allowlist_version"),
+            policy_version=required_string("policy_version"),
+            variables=variables,
         )
         import urllib.request
         import urllib.error

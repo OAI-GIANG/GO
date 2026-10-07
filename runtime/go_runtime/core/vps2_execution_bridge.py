@@ -15,9 +15,10 @@ from typing import Any, Callable, Mapping
 
 
 class BridgeReject(Exception):
-    def __init__(self, reason_code: str):
+    def __init__(self, reason_code: str, decision: "AuthorizationDecision | None" = None):
         super().__init__(reason_code)
         self.reason_code = reason_code
+        self.decision = decision
 
 
 @dataclass(frozen=True)
@@ -125,20 +126,14 @@ class VPS2ExecutionBridge:
             if expected == "bool" and not isinstance(value, bool):
                 raise BridgeReject("VARIABLE_TYPE_INVALID")
 
-    def authorize(self, request: BridgeRequest) -> AuthorizationDecision:
-        if not request.request_id or not request.target_id or not request.operation_id:
-            raise BridgeReject("REQUEST_BINDING_INVALID")
-        if request.target_id != self._target_id:
-            raise BridgeReject("TARGET_OPERATION_MISMATCH")
-        if request.allowlist_version != self._allowlist_version:
-            raise BridgeReject("ALLOWLIST_VERSION_MISMATCH")
-        if request.policy_version != self._policy_version:
-            raise BridgeReject("POLICY_VERSION_MISMATCH")
-        if request.forbidden_raw_command:
-            raise BridgeReject("OPAQUE_OPERATION_REQUIRED")
-        template = self.resolve(request.operation_id)
-        self._validate_variables(template, request.variables)
-
+    def _decision(
+        self,
+        request: BridgeRequest,
+        *,
+        decision: str,
+        reason_code: str,
+        template_hash: str = "",
+    ) -> AuthorizationDecision:
         decision_id = hashlib.sha256(
             "|".join(
                 (
@@ -147,8 +142,10 @@ class VPS2ExecutionBridge:
                     request.operation_id,
                     request.allowlist_version,
                     request.policy_version,
-                    template.template_hash,
+                    template_hash,
                     self._registry_version,
+                    decision,
+                    reason_code,
                 )
             ).encode("utf-8")
         ).hexdigest()
@@ -159,11 +156,51 @@ class VPS2ExecutionBridge:
             operation_id=request.operation_id,
             allowlist_version=request.allowlist_version,
             policy_version=request.policy_version,
+            decision=decision,
+            reason_code=reason_code,
+            template_hash=template_hash,
+            registry_version=self._registry_version,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+
+    def _reject(
+        self,
+        request: BridgeRequest,
+        reason_code: str,
+        template_hash: str = "",
+    ) -> BridgeReject:
+        return BridgeReject(
+            reason_code,
+            self._decision(
+                request,
+                decision="DENY",
+                reason_code=reason_code,
+                template_hash=template_hash,
+            ),
+        )
+
+    def authorize(self, request: BridgeRequest) -> AuthorizationDecision:
+        if not request.request_id or not request.target_id or not request.operation_id:
+            raise self._reject(request, "REQUEST_BINDING_INVALID")
+        if request.target_id != self._target_id:
+            raise self._reject(request, "TARGET_OPERATION_MISMATCH")
+        if request.allowlist_version != self._allowlist_version:
+            raise self._reject(request, "ALLOWLIST_VERSION_MISMATCH")
+        if request.policy_version != self._policy_version:
+            raise self._reject(request, "POLICY_VERSION_MISMATCH")
+        if request.forbidden_raw_command:
+            raise self._reject(request, "OPAQUE_OPERATION_REQUIRED")
+        try:
+            template = self.resolve(request.operation_id)
+            self._validate_variables(template, request.variables)
+        except BridgeReject as exc:
+            raise self._reject(request, exc.reason_code) from exc
+
+        return self._decision(
+            request,
             decision="ALLOW",
             reason_code="AUTHORIZED",
             template_hash=template.template_hash,
-            registry_version=self._registry_version,
-            timestamp=datetime.now(timezone.utc).isoformat(),
         )
 
     def execute(
@@ -173,7 +210,10 @@ class VPS2ExecutionBridge:
     ) -> dict[str, Any]:
         decision = self.authorize(request)
         template = self.resolve(request.operation_id)
+        execution_started_at = datetime.now(timezone.utc).isoformat()
         result = dict(executor(template, dict(request.variables)))
+        evidence_emitted_at = datetime.now(timezone.utc).isoformat()
+        closed_at = datetime.now(timezone.utc).isoformat()
         return {
             "state": "CLOSED",
             "decision": decision,
@@ -187,6 +227,10 @@ class VPS2ExecutionBridge:
                 "authorization_decision_id": decision.decision_id,
                 "readonly_attestation": template.read_only is True,
                 "execution_status": "COMPLETED",
+                "authorization_timestamp": decision.timestamp,
+                "execution_started_at": execution_started_at,
+                "evidence_emitted_at": evidence_emitted_at,
+                "closed_at": closed_at,
                 "result": result,
             },
         }
@@ -195,10 +239,29 @@ class VPS2ExecutionBridge:
         try:
             self.authorize(request)
         except BridgeReject as exc:
+            decision = exc.decision or self._decision(
+                request,
+                decision="DENY",
+                reason_code=exc.reason_code,
+            )
+            rejected_at = datetime.now(timezone.utc).isoformat()
             return {
                 "state": "REJECTED",
-                "decision": "DENY",
+                "decision": decision,
                 "reason_code": exc.reason_code,
                 "executing": False,
+                "evidence": {
+                    "request_id": request.request_id,
+                    "target_id": request.target_id,
+                    "operation_id": request.operation_id,
+                    "template_hash": decision.template_hash,
+                    "allowlist_version": request.allowlist_version,
+                    "policy_version": request.policy_version,
+                    "authorization_decision_id": decision.decision_id,
+                    "reason_code": exc.reason_code,
+                    "execution_status": "REJECTED",
+                    "rejected_at": rejected_at,
+                    "executing": False,
+                },
             }
         raise AssertionError("reject() received an authorizable request")
