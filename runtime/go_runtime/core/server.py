@@ -15,6 +15,7 @@ from .engine.task_contract import TaskContract, TaskContractError
 from .engine.durable_execution import DurableExecution, DurableExecutionError
 from .vps2_execution_bridge import VPS2ExecutionBridge, BridgeRequest, OperationTemplate
 from .cognitive import CognitiveService
+from .phone_agent_server import PHONE_COMMAND_PATH, PHONE_REGISTER_PATH, PHONE_WS_PATH, PhoneSessionRegistry, register as register_phone, send_command as send_phone_command, websocket_session
 from runtime.go_kernel import GateResult
 
 VERSION = "0.1.1"
@@ -43,6 +44,7 @@ class GOApplication:
         self.store=RuntimeStore(config.data_path)
         self.durable=DurableExecution(self.store)
         self.cognitive=CognitiveService(self.store,config.commit,config.tree,config.environment)
+        self.phone_sessions=PhoneSessionRegistry()
         self.durable.recover_orphans()
         self.store.set_meta("version",VERSION); self.store.set_meta("commit",config.commit); self.store.set_meta("tree",config.tree); self.store.set_meta("started_at",utc_now())
 
@@ -173,14 +175,46 @@ class Handler(BaseHTTPRequestHandler):
         value=json.loads(self.rfile.read(length).decode("utf-8"));
         if not isinstance(value,dict): raise ValueError("JSON body must be an object")
         return value
+    def _phone_token(self)->str|None:
+        auth=self.headers.get("Authorization","")
+        return auth[7:] if auth.startswith("Bearer ") else None
+
     def do_GET(self)->None:
         if self.path=="/healthz": self._json(HTTPStatus.OK,{"status":"ok","version":VERSION}); return
+        if self.path.startswith(PHONE_WS_PATH):
+            from urllib.parse import parse_qs, urlparse
+            query=parse_qs(urlparse(self.path).query)
+            device_id=str((query.get("device_id") or [""])[0])
+            token=self._phone_token() or ""
+            if not device_id or not __import__("runtime.go_runtime.core.phone_agent_server",fromlist=["authenticate_device"]).authenticate_device(self.app,device_id,token):
+                self._json(HTTPStatus.UNAUTHORIZED,{"error":"phone authentication failed"}); return
+            key=self.headers.get("Sec-WebSocket-Key")
+            if not key or self.headers.get("Upgrade","").lower()!="websocket":
+                self._json(HTTPStatus.BAD_REQUEST,{"error":"websocket upgrade required"}); return
+            import hashlib, base64
+            accept=base64.b64encode(hashlib.sha1((key+"258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()).decode("ascii")
+            self.send_response(HTTPStatus.SWITCHING_PROTOCOLS); self.send_header("Upgrade","websocket"); self.send_header("Connection","Upgrade"); self.send_header("Sec-WebSocket-Accept",accept); self.end_headers(); self.close_connection=False
+            try: websocket_session(self.app,self,device_id,token,self.app.phone_sessions)
+            except Exception: self.close_connection=True
+            return
         if not self._authorized(): self._json(HTTPStatus.UNAUTHORIZED,{"error":"unauthorized"}); return
         if self.path=="/v1/status": self._json(HTTPStatus.OK,self.app.status()); return
         if self.path.startswith("/v1/tasks/"):
             task=self.app.store.get_task(self.path.rsplit("/",1)[-1]); self._json(HTTPStatus.NOT_FOUND if task is None else HTTPStatus.OK,{"error":"task not found"} if task is None else task); return
         self._json(HTTPStatus.NOT_FOUND,{"error":"not found"})
     def do_POST(self)->None:
+        if self.path==PHONE_REGISTER_PATH:
+            try: result=register_phone(self.app,self._body())
+            except PermissionError as exc: self._json(HTTPStatus.UNAUTHORIZED,{"error":str(exc)}); return
+            except (ValueError,json.JSONDecodeError) as exc: self._json(HTTPStatus.BAD_REQUEST,{"error":str(exc)}); return
+            self._json(HTTPStatus.OK,result); return
+        if self.path==PHONE_COMMAND_PATH:
+            if not self._authorized(): self._json(HTTPStatus.UNAUTHORIZED,{"error":"unauthorized"}); return
+            try:
+                body=self._body(); result=send_phone_command(self.app,self.app.phone_sessions,str(body.get("device_id") or ""),dict(body.get("command") or {}))
+            except ConnectionError as exc: self._json(HTTPStatus.CONFLICT,{"error":str(exc)}); return
+            except (ValueError,json.JSONDecodeError) as exc: self._json(HTTPStatus.BAD_REQUEST,{"error":str(exc)}); return
+            self._json(HTTPStatus.OK,result); return
         if self.path=="/v1/vps2/execute":
             if not self._authorized():
                 self._json(HTTPStatus.UNAUTHORIZED, {"error":"unauthorized"}); return

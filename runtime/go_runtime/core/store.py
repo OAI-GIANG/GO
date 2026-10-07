@@ -64,6 +64,11 @@ class RuntimeStore:
                     provenance_json TEXT, metadata_json TEXT,
                     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS phone_devices (
+                    device_id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL,
+                    capabilities_json TEXT NOT NULL, token_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS audit_events (
                     event_id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT,
                     event_type TEXT NOT NULL, payload_json TEXT NOT NULL, occurred_at TEXT NOT NULL
@@ -173,6 +178,28 @@ class RuntimeStore:
         sql = """INSERT INTO tasks(task_id,operation,state,status,request_json,result_json,error,idempotency_key,idempotency_scope,request_fingerprint,execution_mode,async,queue_eligibility,attempt_no,attempt,run_id,attempt_id,parent_run_id,worker_id,lease_id,lease_until,fence_token,revision,recovery_count,delay_s,last_heartbeat_at,timeout_deadline,recovery_reason,evidence_refs_json,provenance_json,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET operation=excluded.operation,state=excluded.state,status=excluded.status,request_json=excluded.request_json,result_json=excluded.result_json,error=excluded.error,idempotency_key=excluded.idempotency_key,idempotency_scope=excluded.idempotency_scope,request_fingerprint=excluded.request_fingerprint,execution_mode=excluded.execution_mode,async=excluded.async,queue_eligibility=excluded.queue_eligibility,attempt_no=excluded.attempt_no,attempt=excluded.attempt,run_id=excluded.run_id,attempt_id=excluded.attempt_id,parent_run_id=excluded.parent_run_id,worker_id=excluded.worker_id,lease_id=excluded.lease_id,lease_until=excluded.lease_until,fence_token=excluded.fence_token,revision=excluded.revision,recovery_count=excluded.recovery_count,delay_s=excluded.delay_s,last_heartbeat_at=excluded.last_heartbeat_at,timeout_deadline=excluded.timeout_deadline,recovery_reason=excluded.recovery_reason,evidence_refs_json=excluded.evidence_refs_json,provenance_json=excluded.provenance_json,metadata_json=excluded.metadata_json,updated_at=excluded.updated_at"""
         with self._lock, self._connection() as conn:
             conn.execute(sql, values); conn.commit()
+
+    def upsert_phone_device(self, record: dict[str, Any]) -> None:
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                """INSERT INTO phone_devices(device_id,name,platform,capabilities_json,token_hash,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?)
+                   ON CONFLICT(device_id) DO UPDATE SET name=excluded.name,platform=excluded.platform,
+                   capabilities_json=excluded.capabilities_json,token_hash=excluded.token_hash,updated_at=excluded.updated_at""",
+                (record["device_id"], record["name"], record["platform"],
+                 json.dumps(record["capabilities"], sort_keys=True), record["token_hash"],
+                 record["created_at"], record["updated_at"]),
+            )
+            conn.commit()
+
+    def get_phone_device(self, device_id: str) -> dict[str, Any] | None:
+        with self._connection() as conn:
+            row = conn.execute("SELECT * FROM phone_devices WHERE device_id=?", (device_id,)).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["capabilities"] = json.loads(result.pop("capabilities_json"))
+        return result
 
     def create_task(self, task_id: str, operation: str, request: dict[str, Any], idempotency_key: str, now: str) -> dict[str, Any]:
         existing = self.get_by_idempotency(idempotency_key)
