@@ -1,0 +1,19 @@
+﻿{
+  "artifact": "HG_V3_EDGE_AUTH_CLOSURE_EVIDENCE",
+  "status": "VERIFIED",
+  "contract_sha256": "1a50c53e71ae92d148927aa33cf5022c56d727da",
+  "implementation_base_commit": "327fe71f627e341779230ba8f63cb28974d0c7f5",
+  "runtime_binding_commit": "9e399975e59632fa57a383debea002415578d657",
+  "branch": "feature/vps2-execution-bridge-v3-20261007",
+  "negative_closure": {"AC-N09":"PASS","AC-N10":"PASS","AC-N11":"PASS","AC-N12":"PASS","AC-N13":"PASS","AC-N14":"PASS","tests":"23/23 PASS"},
+  "secret_boundary": {"type":"systemd EnvironmentFile","path":"/etc/hg-edge/edge.env","value_exposed":false},
+  "edge": {"url":"https://160.191.242.198","service":"hg-edge","service_status":"active","edge_source_sha256":"6fbfae6db7985167c1859db387105f4c528650654300cebaf1d4ac65b67cda7b"},
+  "vps2": {"identity":"vps-5ku1ry","host":"36.50.135.233","backend":"HG_DURABLE","tunnel":"127.0.0.1:9099 -> 36.50.135.233:9099"},
+  "positive_execution": {"events":["AUTHORIZED","EXECUTING"],"decision":"ALLOW","reason":"AUTHORIZED","target":"vps-5ku1ry","operation":"vps2.health","template_hash":"17f6de0b1a6bd7ddc0dae25ed735903ed734e3a952ad507644a85968e07587ce","allowlist_version":"AL-2026-10-07","policy_version":"POL-2026-10-07","authorization_decision_id":"9f5f172d8fca61cc43051b96d0f8700d484fc9f97c31969722b4e9667a597460","readonly":true,"execution_status":"COMPLETED","http_status":200,"backend":"HG_DURABLE","response_time":"2026-10-07T09:04:39.238133+00:00"},
+  "live_helper_sha256":"67450006c0cb7b5fb3e8d46387a776e84f1144f4e126b490400a8f3bc4309ce5",
+  "live_composed_harness_sha256":"93bf41f1b6889e6179197b31d553fe24601367ef9cb69cf0b6407bab20db0b99",
+  "bridge_source_sha256":"0da70985b52010825f44a3e922e3c68fa9d400ce30153ed9fded88866ae614f4",
+  "provenance": {"secret_value_recorded":false,"real_edge":true,"real_vps2":true,"mock":false,"bypass":false},
+  "merge_gate": {"hg_core_merged":false,"eligible_to_consider_merge":true,"production_ready":false}
+}
+
