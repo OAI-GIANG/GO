@@ -42,6 +42,6 @@
   "production_authorization": false,
   "production_ready": false,
   "deployment_performed": false,
-  "remediation_commit_sha": "PENDING",
-  "artifact_sha256": "PENDING_CANONICAL_HASH"
+  "remediation_commit_sha": "43bc9ede128688a85250e22dcba168b6bc3725b1",
+  "artifact_sha256": "SEE_HG_V3_POST_MERGE_EVIDENCE_PROVENANCE"
 }
