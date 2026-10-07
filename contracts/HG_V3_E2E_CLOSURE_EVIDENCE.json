@@ -1,0 +1,34 @@
+{
+  "artifact": "HG_V3_E2E_CLOSURE_EVIDENCE",
+  "contract_sha": "1a50c53e71ae92d148927aa33cf5022c56d727da",
+  "implementation_parent": "327fe71f627e341779230ba8f63cb28974d0c7f5",
+  "runtime_binding_scope": "GOApplication.execute_vps2 -> VPS2ExecutionBridge -> immutable read-only operation template -> HTTP executor",
+  "runtime_binding_status": "VERIFIED",
+  "negative_tests": {
+    "AC-N09": "PASS",
+    "AC-N10": "PASS",
+    "AC-N11": "PASS",
+    "AC-N12": "PASS",
+    "AC-N13": "PASS",
+    "AC-N14": "PASS",
+    "test_result": "23 passed"
+  },
+  "authorization_gate": {
+    "positive_allow": "VERIFIED",
+    "executing_requires_authorized": "VERIFIED",
+    "executor_boundary_reached": "VERIFIED"
+  },
+  "live_vps2": {
+    "target_id": "vps-5ku1ry",
+    "public_edge": "https://160.191.242.198",
+    "network_reachability": "VERIFIED",
+    "unauthenticated_probe": "HTTP 401 EDGE_UNAUTHORIZED",
+    "authorized_positive_execution": "BLOCKED_AT_EDGE_AUTH",
+    "reason": "The available local credential is a VPS2/backend credential or local durable credential; an edge credential was not exposed to the authorized runtime process. No credential substitution or secret disclosure was performed."
+  },
+  "closure": {
+    "V3_E2E_CLOSURE": "BLOCKED_AT_EDGE_AUTH",
+    "hg_core_merge": false,
+    "production_ready": false
+  }
+}

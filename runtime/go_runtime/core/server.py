@@ -13,6 +13,7 @@ from typing import Any
 
 from .engine.task_contract import TaskContract, TaskContractError
 from .engine.durable_execution import DurableExecution, DurableExecutionError
+from .vps2_execution_bridge import VPS2ExecutionBridge, BridgeRequest, OperationTemplate
 from .cognitive import CognitiveService
 from runtime.go_kernel import GateResult
 
@@ -49,6 +50,58 @@ class GOApplication:
         if self.config.allow_anonymous: return True
         return bool(token and self.config.api_token and secrets.compare_digest(token,self.config.api_token))
 
+
+    def _vps2_bridge(self) -> VPS2ExecutionBridge:
+        target = os.getenv("HG_VPS2_TARGET_ID", "").strip()
+        allowlist = os.getenv("HG_VPS2_ALLOWLIST_VERSION", "").strip()
+        policy = os.getenv("HG_VPS2_POLICY_VERSION", "").strip()
+        if not target or not allowlist or not policy:
+            raise RuntimeError("VPS2_V3_NOT_CONFIGURED")
+        return VPS2ExecutionBridge(
+            target_id=target,
+            allowlist_version=allowlist,
+            policy_version=policy,
+            registry_version="VPS2-REGISTRY-V3",
+            templates={
+                "vps2.health": OperationTemplate("vps2.health", "/backend/health", True, ()),
+                "vps2.memory.list": OperationTemplate("vps2.memory.list", "/backend/memory/list", True, ()),
+            },
+        )
+
+    def execute_vps2(self, body: dict[str, Any]) -> dict[str, Any]:
+        bridge = self._vps2_bridge()
+        target = bridge._target_id
+        req = BridgeRequest(
+            request_id=str(body.get("request_id") or uuid.uuid4()),
+            target_id=str(body.get("target_id") or target),
+            operation_id=str(body.get("operation_id") or ""),
+            allowlist_version=str(body.get("allowlist_version") or ""),
+            policy_version=str(body.get("policy_version") or ""),
+            variables=dict(body.get("variables") or {}),
+        )
+        import urllib.request
+        import urllib.error
+        def executor(template, variables):
+            base = os.getenv("HG_DURABLE_URL", "").strip().rstrip("/")
+            token = os.getenv("HG_DURABLE_TOKEN", "").strip()
+            if not base or not token:
+                raise RuntimeError("VPS2_DURABLE_CREDENTIALS_NOT_CONFIGURED")
+            url = base + template.action
+            request = urllib.request.Request(
+                url,
+                headers={"Authorization": "Bearer " + token, "Accept": "application/json"},
+                method="GET",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=15) as response:
+                    raw = response.read().decode("utf-8")
+                    return {"http_status": response.status, "body": json.loads(raw)}
+            except urllib.error.HTTPError as exc:
+                raw = exc.read().decode("utf-8", errors="replace")
+                raise RuntimeError(f"VPS2_HTTP_{exc.code}:{raw[:500]}") from exc
+        result = bridge.execute(req, executor)
+        result["vps2_target_id"] = target
+        return result
 
     def status(self)->dict[str,Any]:
         return {"name":"GO","version":VERSION,"status":"RUNNING","host":socket.gethostname(),"commit":self.config.commit,"tree":self.config.tree,"environment":self.config.environment,"data_path":str(self.config.data_path),"started_at":self.store.get_meta("started_at"),"operations":["echo","ask"],"integration":"GO_NATIVE_ENGINE"}
@@ -128,6 +181,14 @@ class Handler(BaseHTTPRequestHandler):
             task=self.app.store.get_task(self.path.rsplit("/",1)[-1]); self._json(HTTPStatus.NOT_FOUND if task is None else HTTPStatus.OK,{"error":"task not found"} if task is None else task); return
         self._json(HTTPStatus.NOT_FOUND,{"error":"not found"})
     def do_POST(self)->None:
+        if self.path=="/v1/vps2/execute":
+            if not self._authorized():
+                self._json(HTTPStatus.UNAUTHORIZED, {"error":"unauthorized"}); return
+            try:
+                result=self.app.execute_vps2(self._body())
+            except Exception as exc:
+                self._json(HTTPStatus.BAD_GATEWAY, {"error":type(exc).__name__, "message":str(exc)}); return
+            self._json(HTTPStatus.OK, result); return
         if self.path=="/v1/phone/requests":
             from . import phone_bridge
             auth=self.headers.get("Authorization",""); token=auth[7:] if auth.startswith("Bearer ") else None
