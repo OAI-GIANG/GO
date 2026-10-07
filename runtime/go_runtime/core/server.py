@@ -82,10 +82,10 @@ class GOApplication:
         import urllib.request
         import urllib.error
         def executor(template, variables):
-            base = os.getenv("HG_DURABLE_URL", "").strip().rstrip("/")
-            token = os.getenv("HG_DURABLE_TOKEN", "").strip()
+            base = os.getenv("HG_EDGE_URL", "").strip().rstrip("/")
+            token = os.getenv("HG_EDGE_TOKEN", "").strip()
             if not base or not token:
-                raise RuntimeError("VPS2_DURABLE_CREDENTIALS_NOT_CONFIGURED")
+                raise RuntimeError("VPS2_EDGE_CREDENTIALS_NOT_CONFIGURED")
             url = base + template.action
             request = urllib.request.Request(
                 url,
