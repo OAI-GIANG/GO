@@ -1,24 +1,25 @@
-{
-  "artifact": "VPS2_EXECUTION_BRIDGE_CONTRACT_V3",
-  "version": "DESIGN_HARDENED_V3",
-  "status": "CANONICALIZED_BY_AUTHORIZATION",
-  "historical_recovery": false,
-  "authorization_date": "2026-10-07",
-  "authorization_basis": "Explicit user authorization for STT to fully process V3.",
-  "forensic_precondition": {
-    "historical_v3_found": false,
-    "trusted_historical_source": false
-  },
-  "base_commit": "34b9964622ab72a1815daaa78ef69ed444c6f156",
-  "contract_blob_sha": "1a50c53e71ae92d148927aa33cf5022c56d727da",
-  "implementation_blob_sha": "f8b2832b3607a0bc0c68364d499be553dbeceba1",
-  "test_blob_sha": "e42bea0ba94c42f7001b8b9fe1a2d700bfcefdf6",
-  "implementation_branch": "feature/vps2-execution-bridge-v3-20261007",
-  "canonicalization_rule": "The contract text is the authoritative V3 specification for this implementation; the Git blob SHA is its immutable Git object identity.",
-  "evidence": {
-    "test_command": "python -m pytest -q tests/test_vps2_execution_bridge_v3.py",
-    "test_result": "16 passed in 0.09s",
-    "execution_authority": "VPS2 bridge PDP; executor PEP",
-    "vps2_connection_status": "VERIFIED from pre-existing HG evidence; no new connectivity claim made here"
-  }
+﻿{
+    "artifact":  "VPS2_EXECUTION_BRIDGE_CONTRACT_V3",
+    "version":  "DESIGN_HARDENED_V3",
+    "status":  "CANONICALIZED_BY_AUTHORIZATION",
+    "historical_recovery":  false,
+    "authorization_date":  "2026-10-07",
+    "authorization_basis":  "Explicit user authorization for STT to fully process V3.",
+    "forensic_precondition":  {
+                                  "historical_v3_found":  false,
+                                  "trusted_historical_source":  false
+                              },
+    "base_commit":  "34b9964622ab72a1815daaa78ef69ed444c6f156",
+    "contract_blob_sha":  "1a50c53e71ae92d148927aa33cf5022c56d727da",
+    "implementation_blob_sha":  "f8b2832b3607a0bc0c68364d499be553dbeceba1",
+    "test_blob_sha":  "e42bea0ba94c42f7001b8b9fe1a2d700bfcefdf6",
+    "implementation_branch":  "feature/vps2-execution-bridge-v3-20261007",
+    "canonicalization_rule":  "The contract text is the authoritative V3 specification for this implementation; the Git blob SHA is its immutable Git object identity.",
+    "evidence":  {
+                     "test_command":  "python -m pytest -q tests/test_vps2_execution_bridge_v3.py",
+                     "test_result":  "16 passed in 0.09s",
+                     "execution_authority":  "VPS2 bridge PDP; executor PEP",
+                     "vps2_connection_status":  "VERIFIED from pre-existing HG evidence; no new connectivity claim made here"
+                 },
+    "implementation_commit":  "327fe71f627e341779230ba8f63cb28974d0c7f5"
 }
