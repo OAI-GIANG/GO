@@ -72,23 +72,32 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     def __init__(self, provider_id: str, model_id: str, base_url: str, api_key: str, timeout: int = 60) -> None:
         super().__init__(provider_id, model_id,
                          plugin_id=f"go.{provider_id}.openai-compatible",
-                         supported_operations=("ask", "echo"))
+                         supported_operations=("ask", "echo", "agent"))
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
 
     def invoke(self, request: ModelRequest) -> ModelResult:
-        msg = request.payload.get("message")
-        if isinstance(msg, str):
-            extra = {k: v for k, v in request.payload.items() if k != "message"}
-            content = msg + (("\n\n[GO_CONTEXT]\n" + json.dumps(extra, ensure_ascii=False)) if extra else "")
+        tools = request.payload.get("__tools")
+        messages = request.payload.get("messages")
+        if isinstance(messages, list):
+            request_messages = messages
         else:
-            content = json.dumps(request.payload, ensure_ascii=False)
-        body = {"model": self.model_id, "messages": [{"role": "user", "content": content}], "temperature": 0.2}
+            msg = request.payload.get("message")
+            if isinstance(msg, str):
+                extra = {k: v for k, v in request.payload.items() if k not in {"message", "__tools", "messages"}}
+                content = msg + (("\n\n[GO_CONTEXT]\n" + json.dumps(extra, ensure_ascii=False)) if extra else "")
+            else:
+                content = json.dumps({k: v for k, v in request.payload.items() if k not in {"__tools", "messages"}}, ensure_ascii=False)
+            request_messages = [{"role": "user", "content": content}]
+        body = {"model": self.model_id, "messages": request_messages, "temperature": 0.2}
+        if isinstance(tools, list) and tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
         req = urllib.request.Request(
             self.base_url + "/chat/completions", data=json.dumps(body).encode(), method="POST",
             headers={"Authorization": "Bearer " + self.api_key, "Content-Type": "application/json",
-                     "User-Agent": "GO-Runtime/1.0", "Accept": "application/json"})
+                     "User-Agent": "GO-Runtime/1.1", "Accept": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 payload = json.load(resp)
@@ -97,10 +106,15 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         except urllib.error.URLError as exc:
             raise ValueError("provider unreachable: %s" % getattr(exc, "reason", exc)) from None
         try:
-            text = payload["choices"][0]["message"]["content"]
+            message = payload["choices"][0]["message"]
         except (KeyError, IndexError, TypeError):
             raise ValueError("provider malformed response") from None
-        return ModelResult(self.provider_id, self.model_id, {"text": text, "task_id": request.task_id}, True)
+        output = {"text": message.get("content") or "", "task_id": request.task_id}
+        if message.get("tool_calls"):
+            output["tool_calls"] = message["tool_calls"]
+        if message.get("role"):
+            output["role"] = message["role"]
+        return ModelResult(self.provider_id, self.model_id, output, True)
 
 class ModelGateway:
     """Single execution boundary for model calls. Registry + reasoning target."""

@@ -35,7 +35,7 @@ class PluginContractV1Tests(unittest.TestCase):
         self.assertEqual(adapter.provider_id, "test-provider")
         self.assertEqual(adapter.model_id, "test-model")
         self.assertEqual(adapter.timeout, 60)
-        self.assertEqual(adapter.supported_operations, ("ask", "echo"))
+        self.assertEqual(adapter.supported_operations, ("ask", "echo", "agent"))
 
     def test_model_request_and_result_shapes_unchanged(self):
         request = ModelRequest("T", "p", "m", "ask", {"message": "x"})
@@ -147,7 +147,7 @@ class PluginContractV1Tests(unittest.TestCase):
         self.assertEqual(adapter.plugin_version, "1.0.0")
         self.assertEqual(adapter.contract_version, PLUGIN_CONTRACT_VERSION)
         self.assertEqual(adapter.extension_point, PLUGIN_EXTENSION_POINT)
-        self.assertEqual(adapter.supported_operations, ("ask", "echo"))
+        self.assertEqual(adapter.supported_operations, ("ask", "echo", "agent"))
         self.assertEqual(adapter.source, "runtime.go_runtime.core.model_gateway")
         self.assertTrue(adapter.provenance)
 
