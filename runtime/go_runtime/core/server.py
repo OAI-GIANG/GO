@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 import json
 import os
 import secrets
@@ -15,6 +15,7 @@ from .engine.task_contract import TaskContract, TaskContractError
 from .engine.durable_execution import DurableExecution, DurableExecutionError
 from .vps2_execution_bridge import VPS2ExecutionBridge, BridgeRequest, OperationTemplate
 from .cognitive import CognitiveService
+from .trusted_version_source import verify_from_environment
 from runtime.go_kernel import GateResult
 
 VERSION = "0.1.1"
@@ -43,8 +44,14 @@ class GOApplication:
         self.store=RuntimeStore(config.data_path)
         self.durable=DurableExecution(self.store)
         self.cognitive=CognitiveService(self.store,config.commit,config.tree,config.environment)
+        self.tvs=verify_from_environment(ROOT, commit_sha=config.commit, tree_sha=config.tree, runtime_version=VERSION)
+        self.tvs_enforced = env_bool("HG_TVS_ENFORCE", config.environment.lower() in {"production", "prod"})
         self.durable.recover_orphans()
         self.store.set_meta("version",VERSION); self.store.set_meta("commit",config.commit); self.store.set_meta("tree",config.tree); self.store.set_meta("started_at",utc_now())
+
+    def _require_tvs(self) -> None:
+        if self.tvs_enforced and self.tvs.status != "VERIFIED":
+            raise RuntimeError(self.tvs.reason_code or "BLOCKED_TVS_UNAVAILABLE")
 
     def authenticate(self, token: str|None)->bool:
         if self.config.allow_anonymous: return True
@@ -104,9 +111,10 @@ class GOApplication:
         return result
 
     def status(self)->dict[str,Any]:
-        return {"name":"GO","version":VERSION,"status":"RUNNING","host":socket.gethostname(),"commit":self.config.commit,"tree":self.config.tree,"environment":self.config.environment,"data_path":str(self.config.data_path),"started_at":self.store.get_meta("started_at"),"operations":["echo","ask"],"integration":"GO_NATIVE_ENGINE"}
+        return {"name":"GO","version":VERSION,"status":"RUNNING","host":socket.gethostname(),"commit":self.config.commit,"tree":self.config.tree,"environment":self.config.environment,"data_path":str(self.config.data_path),"started_at":self.store.get_meta("started_at"),"operations":["echo","ask"],"integration":"GO_NATIVE_ENGINE","tvs":{"status":self.tvs.status,"reason_code":self.tvs.reason_code,"tvs_id":self.tvs.identity.tvs_id if self.tvs.identity else None,"tag":self.tvs.tag_name,"enforced":self.tvs_enforced}}
 
     def execute(self, task_id:str, operation:str, payload:dict[str,Any])->dict[str,Any]:
+        self._require_tvs()
         request=__import__("runtime.go_runtime.core.contracts",fromlist=["CognitiveRequest"]).CognitiveRequest(task_id,operation,payload,self.config.commit,self.config.tree,self.config.environment)
         advice=self.cognitive.advise(request); self.cognitive.authorize(task_id,operation)
         context=self.cognitive.reasoning_context(advice)
@@ -133,6 +141,7 @@ class GOApplication:
         return result
 
     def submit(self, body:dict[str,Any])->dict[str,Any]:
+        self._require_tvs()
         task_id=str(body.get("task_id") or f"TASK-{uuid.uuid4().hex}")
         operation=str(body.get("operation") or "").strip().lower(); payload=body.get("payload")
         idem=str(body.get("idempotency_key") or task_id)
@@ -202,6 +211,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path!="/v1/tasks": self._json(HTTPStatus.NOT_FOUND,{"error":"not found"}); return
         try: task=self.app.submit(self._body())
         except (ValueError,json.JSONDecodeError,TaskContractError,DurableExecutionError) as exc: self._json(HTTPStatus.BAD_REQUEST,{"error":str(exc)}); return
+        except RuntimeError as exc: self._json(HTTPStatus.SERVICE_UNAVAILABLE,{"error":str(exc)}); return
         status=HTTPStatus.OK if task.get("state")=="COMPLETED" else HTTPStatus.UNPROCESSABLE_ENTITY; self._json(status,task)
     def log_message(self,format:str,*args:Any)->None: sys.stderr.write("GO "+(format%args))
 
