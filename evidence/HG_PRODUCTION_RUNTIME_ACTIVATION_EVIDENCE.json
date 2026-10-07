@@ -1,0 +1,62 @@
+﻿{
+    "schema":  "HG_PRODUCTION_RUNTIME_ACTIVATION_EVIDENCE_V1",
+    "status":  "ACTIVATION_BLOCKED_INFRASTRUCTURE_TARGET",
+    "canonical":  {
+                      "repository":  "OAI-GIANG/GO",
+                      "branch":  "hg-core",
+                      "commit_sha":  "4346afdb775e68e7f1499896920a894b8a6e6878",
+                      "origin_commit_sha":  "4346afdb775e68e7f1499896920a894b8a6e6878"
+                  },
+    "signed_release":  {
+                           "tag":  "HG-TVS-V2-20261007",
+                           "tag_object_sha":  "8088168a713e764ffef57096806f0af78b20873d",
+                           "target_commit_sha":  "4ec612f81c1fdeab16a31d9379333c7da8416428",
+                           "target_tree_sha":  "b89f8a4fd8da794558d4380ff58ea13e0c9e4ed8",
+                           "runtime_version":  "0.1.1",
+                           "tvs_id":  "6eb8803859d755456488b4d6100577d6cdc4b330f9896b61da68be7b05a82c51",
+                           "signer_fingerprint":  "20318888BFEDD406A36E16F211E8CBEF6DC15DD7"
+                       },
+    "trust_binding":  {
+                          "HG_TVS_TAG":  "HG-TVS-V2-20261007",
+                          "HG_TVS_ROOT_FINGERPRINT":  "20318888BFEDD406A36E16F211E8CBEF6DC15DD7",
+                          "HG_TVS_REPOSITORY":  "OAI-GIANG/GO",
+                          "production_tvs_gate":  "PASS"
+                      },
+    "preflight":  {
+                      "go_runtime_tvs":  "PASS",
+                      "go_tvs_tests":  "PASS",
+                      "vps2_connection":  "PASS",
+                      "vps2_health_http":  200,
+                      "vps2_challenge_identity":  "VERIFIED",
+                      "vps2_negative_post":  "PASS_HTTP_404",
+                      "go_vps2_regression":  "25 passed",
+                      "exact_signed_tag_full_regression":  "72 passed"
+                  },
+    "target_inspection":  {
+                              "runtime_root":  "/opt/go",
+                              "runtime_root_present":  false,
+                              "systemd_service":  "go-runtime.service",
+                              "systemd_running":  false,
+                              "systemd_manager":  "running",
+                              "systemd_unit_path":  "/etc/systemd/system",
+                              "systemd_unit_path_writable":  false,
+                              "blocker":  "PRODUCTION_UNIT_CANNOT_BE_INSTALLED_WITHOUT_MODIFYING_READ_ONLY_FILESYSTEM"
+                          },
+    "activation":  {
+                       "runtime_deployed":  false,
+                       "runtime_restarted":  false,
+                       "production_activated":  false,
+                       "activation_gate":  "BLOCKED_INFRASTRUCTURE_TARGET",
+                       "reason":  "Deployment contract requires persistent go-runtime.service under /etc/systemd/system; target path is read-only."
+                   },
+    "governance":  {
+                       "tv_implementation_modified":  false,
+                       "new_root_key_created":  false,
+                       "canonical_modified":  false,
+                       "merge_to_hg_core":  false,
+                       "production_deploy_performed":  false,
+                       "filesystem_remount_attempted":  false
+                   },
+    "next_required_condition":  "Provide a writable persistent systemd unit target or authorize an equivalent durable service-manager target before activation.",
+    "evidence_sha256":  "cb35f8b34d6637e0605d125c170a28c3537aacc2a33b76248577505f22137fab"
+}
