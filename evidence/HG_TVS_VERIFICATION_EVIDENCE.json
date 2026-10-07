@@ -1,0 +1,80 @@
+{
+  "acceptance_gates": {
+    "AG-01": "PASS",
+    "AG-02": "PASS",
+    "AG-03": "PASS_TEST_FIXTURE",
+    "AG-04": "PASS_TEST_FIXTURE",
+    "AG-05": "PASS",
+    "AG-06": "PASS",
+    "AG-07": "PASS",
+    "AG-08": "PASS",
+    "AG-09": "PASS",
+    "AG-10": "PASS",
+    "AG-11": "PASS_DESIGN",
+    "AG-12": "PASS",
+    "AG-13": "PASS",
+    "AG-14": "PASS",
+    "AG-15": "PASS",
+    "AG-16": "BLOCKED_BY_RELEASE_BOUNDARY"
+  },
+  "authority_model": {
+    "production_root_configured": false,
+    "production_tag_created": false,
+    "root": "EXTERNAL_PINNED_PUBLIC_KEY_FINGERPRINT",
+    "tag_name": "TVS-TEST-CANONICAL",
+    "type": "OPENPGP_SIGNED_ANNOTATED_GIT_TAG"
+  },
+  "canonical": {
+    "branch": "hg-core",
+    "commit_sha": "4346afdb775e68e7f1499896920a894b8a6e6878",
+    "repository": "OAI-GIANG/GO",
+    "tree_sha": "4b812f2f897759d0fe6aa3ac5700d99b6c595c48"
+  },
+  "implementation": {
+    "base_commit_sha": "4346afdb775e68e7f1499896920a894b8a6e6878",
+    "branch": "feature/tvs-trust-anchor-remediation-20261007",
+    "commit_sha": "ad7ecc8d2171ebd52b2750b60eaeae29ae6c01d2",
+    "tree_sha": "d930e81b7bede2f71c9c9d9964f771db29e4ada4"
+  },
+  "integrity": {
+    "artifact_sha256": "d539383cdedfb53d70a25e523ff1caf8b7c7bfadcd4b2d9d1952dd4eece7dd30",
+    "hash_rule": "SHA-256 over canonical JSON bytes excluding integrity"
+  },
+  "production_gate": {
+    "merge_allowed": false,
+    "production_deploy_allowed": false,
+    "reason_code": "BLOCKED_TVS_ROOT_UNAVAILABLE",
+    "release_ready": false,
+    "trusted_version_source": "NOT_CONFIGURED"
+  },
+  "provenance": {
+    "authorization_basis": "USER_EXPLICIT_FULL_EXECUTION_AUTHORIZATION_2026-10-07",
+    "canonicalization": "EXPLICIT_AUTHORIZATION",
+    "created_at": "2026-10-07",
+    "private_keys_in_artifact": false,
+    "secrets_in_artifact": false
+  },
+  "real_cryptographic_verification": {
+    "environment": "VPS2 temporary isolated fixture",
+    "git": "2.43.0",
+    "gpg": "2.4.4",
+    "result": "VERIFIED",
+    "runtime_version": "0.1.1",
+    "signer_fingerprint": "6A1C43FA42C118AFAEA1AAD2B573965B2B08310C",
+    "tag_object_sha1": "d02519e6e0e9641f663de8ae942f60e11302553b",
+    "tag_target_commit_sha": "4346afdb775e68e7f1499896920a894b8a6e6878",
+    "tag_target_tree_sha": "4b812f2f897759d0fe6aa3ac5700d99b6c595c48",
+    "tvs_id": "1d62be330c0eee58102602eaa1941f521861e9514c19e2d541289ee83d8e0cb9"
+  },
+  "schema": "HG_TVS_VERIFICATION_EVIDENCE_V2",
+  "status": "IMPLEMENTATION_VERIFIED_RELEASE_BLOCKED_EXTERNAL_ROOT",
+  "tests": {
+    "adversarial": "12 passed",
+    "existing_go_runtime_and_vps2_regression": "25 passed",
+    "full_pytest": "72 passed",
+    "git_diff_check": "PASS",
+    "real_signed_tag_positive": "VERIFIED",
+    "runtime_binding": "3 passed",
+    "trusted_version_source": "11 passed"
+  }
+}
