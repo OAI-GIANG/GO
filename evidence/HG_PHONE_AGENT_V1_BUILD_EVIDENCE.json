@@ -1,0 +1,41 @@
+{
+  "schema": "HG_PHONE_AGENT_V1_BUILD_EVIDENCE",
+  "status": "IMPLEMENTED_ON_ISOLATED_BRANCH",
+  "repository": "OAI-GIANG/GO",
+  "base_commit": "61c519960d01255e7c343a3a6c7ea240575e4498",
+  "branch": "feature/phone-agent-v1",
+  "head_commit": "58fe63060e9c73eab61fc0b940c92c99ab5fb049",
+  "canonical_branch_unchanged": "61c519960d01255e7c343a3a6c7ea240575e4498",
+  "implementation": {
+    "phone_agent": true,
+    "termux_run_command_adapter": true,
+    "go_register_endpoint": true,
+    "go_websocket_endpoint": true,
+    "go_phone_command_endpoint": true,
+    "reconnect_backoff": "1s..30s",
+    "wss_required": true,
+    "arbitrary_shell_denied": true,
+    "device_token_hashed_at_rest": true
+  },
+  "tests": {
+    "full_pytest": "70 passed",
+    "phone_server_e2e": "2 passed",
+    "phone_agent_contract": "5 passed",
+    "git_diff_check": "PASS",
+    "android_debug_apk": "BUILD SUCCESSFUL",
+    "android_install": "PASS",
+    "android_launch_no_fatal_exception": "PASS"
+  },
+  "termux": {
+    "installed_version": "0.118.3",
+    "allow_external_apps_required": true,
+    "run_command_permission_declared": true,
+    "run_command_permission_user_grant": "BLOCKED_USER_ACTION",
+    "direct_run_command_attempt": "REJECTED_BY_ANDROID_PERMISSION",
+    "reason": "com.termux.permission.RUN_COMMAND is dangerous and must be granted by the device user"
+  },
+  "deployment": "NOT_PERFORMED",
+  "restart": "NOT_PERFORMED",
+  "merge": "NOT_PERFORMED",
+  "tvS_or_version_changes": false
+}
