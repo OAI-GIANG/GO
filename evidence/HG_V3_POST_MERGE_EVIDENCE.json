@@ -1,0 +1,47 @@
+{
+  "artifact": "HG_V3_POST_MERGE_EVIDENCE",
+  "status": "VERFIED\",
+  "scope": "evidence_remediation_only",
+  "pre_merge_head": "34b9964622ab72a1815daaa78ef69ed444c6f156",
+  "merged_head": "be4318b58a7bf43c8227c9e2d87d7d26e9b87c0c",
+  "feature_head": "be4318b58a7bf43c8227c9e2d87d7d26e9b87c0c",
+  "merge_authorization": "CHU_NHAN_AUTHORIZED_EVIDENCE_REMEDIATION_AND_STEPS_1_TO_7",
+  "merge_result": "hg-core advanced from 34b9964622ab72a1815daaa78ef69ed444c6f156 to be4318b58a7bf43c8227c9e2d87d7d26e9b87c0c",
+  "rewrite_be4318": false,
+  "pre_merge_evidence_preserved": true,
+  "pre_merge_evidence_path": "evidence/HG_V3_EDGE_AUTH_CLIOURE_EVIDENCE.json",
+  "historical_unrecovered_sha256": "852E31D6850778C10FA1654BEA01847229E64628B4954710D19372F6859F93830",
+  "historical_unrecovered_sha_status": "NOT_RECOVERED",
+  "current_pre_merge_evidence_git_blob_sha1": "5ad50e5003e98a45239e82039ee435326535cb15",
+  "current_pre_merge_evidence_raw_git_sha256": "5BA5D5A4B7F6F6E2806AD5DEAD2782A6E2FF8A8D8C320291BECCD8278BFAFB35",
+  "verification_clone": "E:\\OAI\\HG\\.merge-verify",
+  "verification_clone_head": "be4318b58a7bf43c8227c9e2d87d7d26e9b87c0c",
+  "verification_clone_clean": true,
+  "scope_diff_base": "34b9964622ab72a1815daaa78ef69ed444c6f156",
+  "scope_diff_head": "be4318b58a7bf43c8227c9e2d87d7d26e9b87c0c",
+  "scope_changed_files": 8,
+  "tests": {
+    "command": "python -m pytest tests/test_vpsr_execution_bridge_v3.py tests/test_vpsr_execution_runtime_binding_v3.py -q",
+    "result": "23 passed in 0.12s",
+    "passed": 23,
+    "failed": 0
+  },
+  "secret_scan": {
+    "scope": "merge_diff",
+    "patterns_checked": [
+      "OpenAI-style API keys",
+      "GitHub personal access tokens",
+      "GitHub fine-grained tokens",
+      "private key headers",
+      "Authorization Bearer tokens",
+      "password assignments"
+    ],
+    "hit_count": 0
+  },
+  "evidence_sha_method": "SHA-256 over exact UTF-8 bytes returned from the committed Git blob of this artifact",
+  "production_authorization": false,
+  "production_ready": false,
+  "deployment_performed": false,
+  "remediation_commit_sha": "PENDING",
+  "artifact_sha256": "PENDING_CANONICAL_HASH"
+}
