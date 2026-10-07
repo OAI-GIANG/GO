@@ -1,0 +1,71 @@
+package com.hg.phoneagent;
+
+import android.app.Activity;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.net.Uri;
+import android.view.View;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import android.graphics.Color;
+import java.io.*;
+import java.net.*;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.*;
+import org.json.*;
+import javax.net.ssl.SSLSocketFactory;
+
+public class MainActivity extends Activity {
+    SharedPreferences prefs; EditText server, pairing; TextView status; WebView web; Button connect;
+    String deviceId;
+    final Handler main = new Handler(Looper.getMainLooper());
+    volatile boolean running=false; Socket ws;
+
+    @Override public void onCreate(Bundle b){super.onCreate(b); prefs=getSharedPreferences("hg",0); deviceId=prefs.getString("device_id", "hg-"+UUID.randomUUID().toString()); prefs.edit().putString("device_id",deviceId).apply(); build();}
+    void build(){
+        LinearLayout root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); int sbRes=getResources().getIdentifier("status_bar_height","dimen","android"); int sb=sbRes>0?getResources().getDimensionPixelSize(sbRes):0; root.setPadding(0,sb,0,0); root.setBackgroundColor(Color.rgb(15,17,23));
+        server=new EditText(this); server.setHint("https://<HG endpoint>"); server.setText(prefs.getString("server", "")); server.setTextColor(Color.WHITE); server.setHintTextColor(Color.GRAY); root.addView(server);
+        pairing=new EditText(this); pairing.setHint("Pairing token (chỉ lần đầu)"); pairing.setTextColor(Color.WHITE); pairing.setHintTextColor(Color.GRAY); root.addView(pairing);
+        connect=new Button(this); connect.setText("Kết nối HG"); root.addView(connect);
+        status=new TextView(this); status.setTextColor(Color.LTGRAY); status.setText("Chưa kết nối • "+deviceId); root.addView(status);
+        web=new WebView(this); web.setVisibility(View.GONE); WebSettings wsx=web.getSettings(); wsx.setJavaScriptEnabled(true); wsx.setDomStorageEnabled(true); web.setWebViewClient(new WebViewClient()); root.addView(web,new LinearLayout.LayoutParams(-1,0,1));
+        setContentView(root); connect.setOnClickListener(v->new Thread(this::connectFlow).start());
+        if(!server.getText().toString().isEmpty()) new Thread(this::connectFlow).start();
+    }
+    void ui(String s){main.post(()->{status.setText(s);status.setVisibility(s!=null&&s.contains("CONNECTED")?View.GONE:View.VISIBLE);});}
+    String base(){String s=server.getText().toString().trim(); if(s.endsWith("/"))s=s.substring(0,s.length()-1); return s;}
+    void connectFlow(){try{
+        String base=base(); if(base.isEmpty())throw new Exception("Thiếu server URL"); if(!base.startsWith("https://"))throw new Exception("PHONE_AGENT_REQUIRES_HTTPS"); prefs.edit().putString("server",base).apply();
+        String token=prefs.getString("device_token","");
+        if(token.isEmpty()){String pair=pairing.getText().toString().trim(); if(pair.isEmpty()){try{pair=new String(openFileInput("pairing.txt").readAllBytes(),StandardCharsets.UTF_8).trim();}catch(Exception ignored){}}
+            JSONObject body=new JSONObject(); body.put("pairing_token",pair); body.put("device_id",deviceId); body.put("name","HG Phone"); body.put("platform","android"); body.put("capabilities",new JSONArray(Arrays.asList("ping","device_info","termux_command")));
+            JSONObject r=post(base+"/api/phone/register",body); token=r.getString("device_token"); prefs.edit().putString("device_token",token).apply(); main.post(()->pairing.setText(""));
+        }
+        ui("Đã đăng ký • mở HG…"); openWeb(base); running=true; startWs(base,token);
+    }catch(Exception e){ui("Kết nối lỗi: "+e.getMessage());}}
+    void openWeb(String base){main.post(()->{web.setVisibility(View.VISIBLE); web.loadUrl(base+"/"); connect.setVisibility(View.GONE); server.setVisibility(View.GONE); pairing.setVisibility(View.GONE);});}
+    JSONObject post(String url, JSONObject body)throws Exception{HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection(); c.setRequestMethod("POST"); c.setConnectTimeout(10000); c.setReadTimeout(15000); c.setDoOutput(true); c.setRequestProperty("Content-Type","application/json"); try(OutputStream o=c.getOutputStream()){o.write(body.toString().getBytes(StandardCharsets.UTF_8));} int code=c.getResponseCode(); InputStream in=code<400?c.getInputStream():c.getErrorStream(); String text=new String(in.readAllBytes(),StandardCharsets.UTF_8); if(code>=400)throw new Exception(text); return new JSONObject(text);}
+    void startWs(String base,String token){new Thread(()->{long backoff=1000; while(running){try{
+        URI u=URI.create(base.replaceFirst("^http","ws")+"/v1/phone/ws?device_id="+URLEncoder.encode(deviceId,"UTF-8")); String host=u.getHost(); int port=u.getPort()>0?u.getPort():(u.getScheme().equals("wss")?443:80);
+        if(!u.getScheme().equals("wss")) throw new Exception("PHONE_AGENT_REQUIRES_WSS");
+        ws=u.getScheme().equals("wss") ? SSLSocketFactory.getDefault().createSocket(host,port) : new Socket(host,port); ws.setSoTimeout(25000); OutputStream out=ws.getOutputStream(); InputStream in=ws.getInputStream(); String key=Base64.getEncoder().encodeToString(randomBytes(16)); String req="GET "+u.getRawPath()+"?"+u.getRawQuery()+" HTTP/1.1\r\nHost: "+host+":"+port+"\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: "+key+"\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer "+token+"\r\n\r\n"; out.write(req.getBytes(StandardCharsets.US_ASCII)); out.flush(); readHandshake(in); ui("HG Phone Bridge: CONNECTED"); sendText(out,"{\"type\":\"heartbeat\"}"); backoff=1000;
+        long last=System.currentTimeMillis(); while(running&&!ws.isClosed()){try{Frame f=readFrame(in); if(f==null)break; if(f.opcode==1)handleMessage(out,new String(f.data,StandardCharsets.UTF_8)); else if(f.opcode==9)sendFrame(out,(byte)10,f.data);}catch(SocketTimeoutException e){if(System.currentTimeMillis()-last>15000){sendText(out,"{\"type\":\"heartbeat\"}");last=System.currentTimeMillis();}}}
+    }catch(Exception e){ui("Phone Bridge: "+e.getMessage());} finally {try{if(ws!=null)ws.close();}catch(Exception ignored){}} if(running){try{Thread.sleep(backoff);}catch(InterruptedException ignored){Thread.currentThread().interrupt();break;} backoff=Math.min(backoff*2,30000);}}}).start();}
+    void handleMessage(OutputStream out,String text)throws Exception{JSONObject m=new JSONObject(text); if("hello".equals(m.optString("type"))){sendText(out,"{\"type\":\"heartbeat\"}");return;} if("command".equals(m.optString("type"))){String id=m.optString("id");JSONObject c=m.optJSONObject("command");JSONObject result=new JSONObject(); result.put("ok",true); String type=c==null?"":c.optString("type"); if("ping".equals(type))result.put("pong",true); else if("device_info".equals(type)){result.put("device_id",deviceId);result.put("model",android.os.Build.MODEL);result.put("android",android.os.Build.VERSION.RELEASE);} else if("termux_command".equals(type)){String path=c.optString("path"); if(!"/data/data/com.termux/files/home/hg-agent/dispatch.sh".equals(path)){result.put("ok",false);result.put("error","CAPABILITY_DENIED");} else {JSONArray a=c.optJSONArray("args"); String[] args=new String[a==null?0:a.length()]; for(int i=0;i<args.length;i++)args[i]=a.optString(i); String rid=TermuxRunner.run(this,path,args); result.put("accepted",true); result.put("termux_request_id",rid);}} else {result.put("ok",false);result.put("error","UNSUPPORTED_COMMAND");} JSONObject r=new JSONObject();r.put("type","result");r.put("id",id);r.put("kind","phone.command.result");r.put("result",result);sendText(out,r.toString());}}
+    byte[] randomBytes(int n){byte[] b=new byte[n];new Random().nextBytes(b);return b;}
+    void readHandshake(InputStream in)throws Exception{ByteArrayOutputStream b=new ByteArrayOutputStream();int prev=0,cur;while((cur=in.read())!=-1){b.write(cur);if(prev=='\r'&&cur=='\n'){byte[] a=b.toByteArray();int n=a.length;if(n>=4&&a[n-4]=='\r'&&a[n-3]=='\n')break;}prev=cur;}String h=b.toString(StandardCharsets.US_ASCII);if(!h.startsWith("HTTP/1.1 101"))throw new Exception("WebSocket handshake failed: "+h.split("\r\n")[0]);}
+    void sendText(OutputStream out,String s)throws Exception{sendFrame(out,(byte)1,s.getBytes(StandardCharsets.UTF_8));}
+    void sendFrame(OutputStream out,byte opcode,byte[] data)throws Exception{int n=data.length;ByteArrayOutputStream h=new ByteArrayOutputStream();h.write(0x80|opcode);if(n<126)h.write(0x80|n);else if(n<65536){h.write(0x80|126);h.write((n>>8)&255);h.write(n&255);}else{h.write(0x80|127);for(int i=7;i>=0;i--)h.write((n>>(8*i))&255);}byte[] mask=randomBytes(4);h.write(mask);for(int i=0;i<n;i++)data[i]^=mask[i%4];h.write(data);out.write(h.toByteArray());out.flush();}
+    Frame readFrame(InputStream in)throws Exception{int a=in.read(),b=in.read();if(a<0||b<0)return null;int op=a&15;int n=b&127;if(n==126)n=(in.read()<<8)|in.read();else if(n==127){n=0;for(int i=0;i<8;i++)n=(n<<8)|in.read();}boolean masked=(b&128)!=0;byte[] mask=masked?in.readNBytes(4):new byte[0];byte[] d=in.readNBytes(n);if(masked)for(int i=0;i<n;i++)d[i]^=mask[i%4];return new Frame(op,d);}
+    static class Frame{int opcode;byte[] data;Frame(int o,byte[]d){opcode=o;data=d;}}
+    @Override protected void onDestroy(){running=false;try{if(ws!=null)ws.close();}catch(Exception ignored){}super.onDestroy();}
+}
