@@ -265,6 +265,63 @@ class VPS1HealthTool(ToolAdapter):
             return {"status": response.status, "body": json.load(response)}
 
 
+class RepoForensicsTool(ToolAdapter):
+    """Governed, read-only, root-bounded repository forensics (deterministic, no network)."""
+
+    def __init__(self) -> None:
+        self._allowed_root = os.getenv("HG_FORENSICS_ROOT", "/opt/go").rstrip("/") or "/"
+        self._spec = ToolSpec(
+            name="hg.repo.forensics",
+            description="Deterministic repository forensics: inventory / module_map / duplicates / parity(drift). Read-only, root-bounded, no network.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "root": {"type": "string"},
+                    "mode": {"type": "string"},
+                    "exclude": {"type": "array"},
+                    "canonical_manifest": {"type": "object"},
+                },
+                "required": ["root"],
+                "additionalProperties": False,
+            },
+            read_only=True,
+            destructive=False,
+            plugin_id="go.hg",
+        )
+
+    def spec(self) -> ToolSpec:
+        return self._spec
+
+    def _resolve_root(self, root: str) -> str:
+        from pathlib import Path
+        base = Path(self._allowed_root).resolve()
+        target = Path(root).resolve()
+        if target != base and base not in target.parents:
+            raise PermissionError("root_outside_HG_FORENSICS_ROOT")
+        return str(target)
+
+    def invoke(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        from .engine import repo_forensics as rf
+        root = self._resolve_root(str(arguments["root"]))
+        mode = str(arguments.get("mode") or "report")
+        raw_exclude = arguments.get("exclude")
+        exclude = [str(x) for x in raw_exclude] if isinstance(raw_exclude, list) else None
+        if mode == "inventory":
+            inv = rf.file_inventory(root, exclude_dirs=exclude)
+            return {"status": 200, "data": {"mode": mode, "files": len(inv), "inventory_sha256": rf.digest(inv)}}
+        if mode == "module_map":
+            mm = rf.module_imports(root, exclude_dirs=exclude)
+            errors = sorted(p for p, m in mm.items() if m.get("parse") == "error")
+            return {"status": 200, "data": {"mode": mode, "modules": len(mm), "parse_errors": errors}}
+        if mode == "duplicates":
+            dup = rf.duplicate_candidates(root, exclude_dirs=exclude)
+            return {"status": 200, "data": {"mode": mode, "duplicate_groups": len(dup), "duplicate_candidates": dup}}
+        manifest = arguments.get("canonical_manifest")
+        report = dict(rf.forensic_report(root, manifest if isinstance(manifest, dict) else None, exclude_dirs=exclude))
+        report["duplicate_candidates_count"] = len(report.pop("duplicate_candidates", []))
+        return {"status": 200, "data": report}
+
+
 def _github_get(path: str, broker: "CredentialBroker") -> dict[str, Any]:
     token = broker.get("HG_GITHUB_TOKEN")
     req = urllib.request.Request(
@@ -485,4 +542,5 @@ def default_tool_registry() -> ToolRegistry:
         registry.register(t)
     registry.register(VPS1HealthTool())
     registry.register(VPS2HealthTool())
+    registry.register(RepoForensicsTool())
     return registry
