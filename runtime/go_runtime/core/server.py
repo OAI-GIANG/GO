@@ -179,7 +179,7 @@ class GOApplication:
         metadata=claimed.get("metadata") or {}
         operation=str(metadata.get("operation") or operation); payload=dict(metadata.get("payload") or payload)
         try:
-            tool_names={n for n in self.tools._tools if n.startswith("github.")}
+            tool_names={n for n in self.tools._tools if n.startswith(("github.","hg."))}
             allowed={"echo","ask"}|tool_names
             if operation not in allowed: raise ValueError("unsupported operation; allowed operations: echo, ask, "+", ".join(sorted(tool_names)))
             result=self.execute_tool(task_id,operation,payload) if operation in tool_names else self.execute(task_id,operation,payload)
