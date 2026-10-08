@@ -123,6 +123,7 @@ class ToolRegistry:
                 "input_schema": s.input_schema,
                 "read_only": s.read_only,
                 "destructive": s.destructive,
+                "operation_class": "DESTRUCTIVE" if s.destructive else ("READ_ONLY" if s.read_only else "MUTATING"),
                 "plugin_id": s.plugin_id,
                 "plugin_version": s.plugin_version,
                 "contract_version": s.contract_version,
@@ -486,12 +487,12 @@ def _write_file_body(v: dict[str, Any], broker: "CredentialBroker") -> dict[str,
 
 
 class _GhTool(ToolAdapter):
-    def __init__(self, name, desc, props, read_only, method, path_tmpl, body_fn=None, broker=None, required=None):
+    def __init__(self, name, desc, props, read_only, method, path_tmpl, body_fn=None, broker=None, required=None, destructive=False):
         self._spec = ToolSpec(name=name, description=desc,
                               input_schema={"type": "object",
                                             "properties": {p: {"type": "string"} for p in props},
                                             "required": required or props, "additionalProperties": False},
-                              read_only=read_only, destructive=False, plugin_id="go.github")
+                              read_only=read_only, destructive=destructive, plugin_id="go.github")
         self._method = method; self._path = path_tmpl; self._body = body_fn
         self.broker = broker or CredentialBroker()
 
@@ -517,9 +518,9 @@ def _extra_github_tools() -> list[ToolAdapter]:
     R("github.read_actions_run", "Read an actions run by id.", ["repository", "run_id"], "/repos/{owner}/{repo}/actions/runs/{run_id}")
     R("github.read_check_runs", "Read check-runs for a ref.", ["repository", "ref"], "/repos/{owner}/{repo}/commits/{ref}/check-runs")
     T.append(_GhTool("github.create_branch", "Create a branch from a ref.", ["repository", "branch", "from_ref"], False, "POST", "/repos/{owner}/{repo}/git/refs", _branch_body))
-    T.append(_GhTool("github.delete_branch", "Delete a branch ref (cleanup).", ["repository", "branch"], False, "DELETE", "/repos/{owner}/{repo}/git/refs/heads/{branch}", lambda v, b: None))
+    T.append(_GhTool("github.delete_branch", "Delete a branch ref (destructive cleanup; requires approval).", ["repository", "branch"], False, "DELETE", "/repos/{owner}/{repo}/git/refs/heads/{branch}", lambda v, b: None, destructive=True))
     T.append(_GhTool("github.write_file", "Create/update a file on a branch.", ["repository", "branch", "path", "content", "sha", "message"], False, "PUT", "/repos/{owner}/{repo}/contents/{path}", _write_file_body, required=["repository", "branch", "path", "content"]))
-    T.append(_GhTool("github.update_branch", "Update a branch ref (fast-forward/force).", ["repository", "branch", "sha"], False, "PATCH", "/repos/{owner}/{repo}/git/refs/heads/{branch}", lambda v, b: {"sha": str(v["sha"])}))
+    T.append(_GhTool("github.update_branch", "Update/force-move a branch ref (destructive; requires approval).", ["repository", "branch", "sha"], False, "PATCH", "/repos/{owner}/{repo}/git/refs/heads/{branch}", lambda v, b: {"sha": str(v["sha"])}, destructive=True))
     T.append(_GhTool("github.create_pr", "Create a pull request.", ["repository", "title", "head", "base"], False, "POST", "/repos/{owner}/{repo}/pulls", lambda v, b: {"title": str(v["title"]), "head": str(v["head"]), "base": str(v["base"])}))
     T.append(_GhTool("github.update_pr", "Update a pull request state/title/base.", ["repository", "number", "title", "state", "base"], False, "PATCH", "/repos/{owner}/{repo}/pulls/{number}", lambda v, b: {k: v[k] for k in ("title", "state", "base") if v.get(k)}, required=["repository", "number"]))
     T.append(_GhTool("github.comment_issue", "Comment on an issue/PR.", ["repository", "number", "body"], False, "POST", "/repos/{owner}/{repo}/issues/{number}/comments", lambda v, b: {"body": str(v["body"])}))
