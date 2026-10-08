@@ -43,6 +43,7 @@ class RuntimeStore:
                     task_id TEXT PRIMARY KEY, operation TEXT NOT NULL,
                     state TEXT NOT NULL DEFAULT 'QUEUED',
                     status TEXT,
+                    task_outcome TEXT NOT NULL DEFAULT 'UNKNOWN',
                     request_json TEXT NOT NULL,
                     result_json TEXT, error TEXT,
                     idempotency_key TEXT UNIQUE,
@@ -111,7 +112,7 @@ class RuntimeStore:
             """)
             cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
             additions = {
-                "state": "TEXT", "idempotency_scope": "TEXT", "request_fingerprint": "TEXT",
+                "state": "TEXT", "task_outcome": "TEXT NOT NULL DEFAULT 'UNKNOWN'", "idempotency_scope": "TEXT", "request_fingerprint": "TEXT",
                 "execution_mode": "TEXT", "async": "INTEGER NOT NULL DEFAULT 0", "queue_eligibility": "TEXT",
                 "attempt_no": "INTEGER NOT NULL DEFAULT 0", "attempt": "INTEGER NOT NULL DEFAULT 0",
                 "run_id": "TEXT", "attempt_id": "TEXT", "parent_run_id": "TEXT", "worker_id": "TEXT",
@@ -124,8 +125,9 @@ class RuntimeStore:
                 if name not in cols:
                     conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {typ}")
             if "status" in cols:
-                conn.execute("UPDATE tasks SET state=CASE status WHEN 'SUCCEEDED' THEN 'COMPLETED' WHEN 'FAILED' THEN 'FAILED' WHEN 'RUNNING' THEN 'RUNNING' ELSE 'QUEUED' END WHERE state IS NULL")
-            conn.execute("UPDATE tasks SET state=COALESCE(state,'QUEUED'), execution_mode=COALESCE(execution_mode, CASE WHEN async=1 THEN 'ASYNC' ELSE 'SYNC' END), queue_eligibility=COALESCE(queue_eligibility,'DISPATCHABLE'), evidence_refs_json=COALESCE(evidence_refs_json,'[]'), provenance_json=COALESCE(provenance_json,'{}'), metadata_json=COALESCE(metadata_json,'{}')")
+                conn.execute("UPDATE tasks SET state=CASE status WHEN 'SUCCEEDED' THEN 'COMPLETED' WHEN 'FAILED' THEN 'FAILED' WHEN 'RUNNING' THEN 'RUNNING' WHEN 'COMPLETED' THEN 'COMPLETED' ELSE COALESCE(state,'QUEUED') END WHERE state IS NULL OR state=''")
+                conn.execute("UPDATE tasks SET task_outcome=CASE status WHEN 'SUCCEEDED' THEN 'SUCCESS' WHEN 'FAILED' THEN 'FAILURE' WHEN 'COMPLETED' THEN 'UNKNOWN' ELSE COALESCE(task_outcome,'UNKNOWN') END")
+            conn.execute("UPDATE tasks SET state=COALESCE(state,'QUEUED'), task_outcome=COALESCE(task_outcome,'UNKNOWN'), execution_mode=COALESCE(execution_mode, CASE WHEN async=1 THEN 'ASYNC' ELSE 'SYNC' END), queue_eligibility=COALESCE(queue_eligibility,'DISPATCHABLE'), evidence_refs_json=COALESCE(evidence_refs_json,'[]'), provenance_json=COALESCE(provenance_json,'{}'), metadata_json=COALESCE(metadata_json,'{}')")
             cp_cols={row[1] for row in conn.execute("PRAGMA table_info(checkpoint_records)").fetchall()}
             if "repository_json" not in cp_cols:
                 conn.execute("ALTER TABLE checkpoint_records ADD COLUMN repository_json TEXT NOT NULL DEFAULT '{}'")
@@ -156,9 +158,12 @@ class RuntimeStore:
         state = task.get("state", "QUEUED")
         operation = task.get("operation", "echo")
         request = task.get("request") or {"operation": operation, "payload": task.get("metadata", {}).get("payload", {})}
-        status = _STATE_TO_STATUS.get(state, "PENDING")
+        task_outcome = str(task.get("task_outcome") or task.get("status") or "UNKNOWN")
+        if task_outcome not in {"SUCCESS", "FAILURE", "UNKNOWN"}:
+            raise ValueError("invalid_task_outcome")
+        status = task_outcome
         values = (
-            task["id"], operation, state, status, json.dumps(request, sort_keys=True),
+            task["id"], operation, state, status, task_outcome, json.dumps(request, sort_keys=True),
             json.dumps(task.get("report"), sort_keys=True) if task.get("report") is not None else None,
             json.dumps(task.get("error"), sort_keys=True) if task.get("error") is not None else None,
             task.get("idempotency_key"), task.get("idempotency_scope"), task.get("request_fingerprint"),
@@ -170,14 +175,14 @@ class RuntimeStore:
             json.dumps(task.get("evidence_refs", []), sort_keys=True), json.dumps(task.get("provenance", {}), sort_keys=True),
             json.dumps(task.get("metadata", {}), sort_keys=True), task.get("created_at", now), now,
         )
-        sql = """INSERT INTO tasks(task_id,operation,state,status,request_json,result_json,error,idempotency_key,idempotency_scope,request_fingerprint,execution_mode,async,queue_eligibility,attempt_no,attempt,run_id,attempt_id,parent_run_id,worker_id,lease_id,lease_until,fence_token,revision,recovery_count,delay_s,last_heartbeat_at,timeout_deadline,recovery_reason,evidence_refs_json,provenance_json,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET operation=excluded.operation,state=excluded.state,status=excluded.status,request_json=excluded.request_json,result_json=excluded.result_json,error=excluded.error,idempotency_key=excluded.idempotency_key,idempotency_scope=excluded.idempotency_scope,request_fingerprint=excluded.request_fingerprint,execution_mode=excluded.execution_mode,async=excluded.async,queue_eligibility=excluded.queue_eligibility,attempt_no=excluded.attempt_no,attempt=excluded.attempt,run_id=excluded.run_id,attempt_id=excluded.attempt_id,parent_run_id=excluded.parent_run_id,worker_id=excluded.worker_id,lease_id=excluded.lease_id,lease_until=excluded.lease_until,fence_token=excluded.fence_token,revision=excluded.revision,recovery_count=excluded.recovery_count,delay_s=excluded.delay_s,last_heartbeat_at=excluded.last_heartbeat_at,timeout_deadline=excluded.timeout_deadline,recovery_reason=excluded.recovery_reason,evidence_refs_json=excluded.evidence_refs_json,provenance_json=excluded.provenance_json,metadata_json=excluded.metadata_json,updated_at=excluded.updated_at"""
+        sql = """INSERT INTO tasks(task_id,operation,state,status,task_outcome,request_json,result_json,error,idempotency_key,idempotency_scope,request_fingerprint,execution_mode,async,queue_eligibility,attempt_no,attempt,run_id,attempt_id,parent_run_id,worker_id,lease_id,lease_until,fence_token,revision,recovery_count,delay_s,last_heartbeat_at,timeout_deadline,recovery_reason,evidence_refs_json,provenance_json,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET operation=excluded.operation,state=excluded.state,status=excluded.status,task_outcome=excluded.task_outcome,request_json=excluded.request_json,result_json=excluded.result_json,error=excluded.error,idempotency_key=excluded.idempotency_key,idempotency_scope=excluded.idempotency_scope,request_fingerprint=excluded.request_fingerprint,execution_mode=excluded.execution_mode,async=excluded.async,queue_eligibility=excluded.queue_eligibility,attempt_no=excluded.attempt_no,attempt=excluded.attempt,run_id=excluded.run_id,attempt_id=excluded.attempt_id,parent_run_id=excluded.parent_run_id,worker_id=excluded.worker_id,lease_id=excluded.lease_id,lease_until=excluded.lease_until,fence_token=excluded.fence_token,revision=excluded.revision,recovery_count=excluded.recovery_count,delay_s=excluded.delay_s,last_heartbeat_at=excluded.last_heartbeat_at,timeout_deadline=excluded.timeout_deadline,recovery_reason=excluded.recovery_reason,evidence_refs_json=excluded.evidence_refs_json,provenance_json=excluded.provenance_json,metadata_json=excluded.metadata_json,updated_at=excluded.updated_at"""
         with self._lock, self._connection() as conn:
             conn.execute(sql, values); conn.commit()
 
     def create_task(self, task_id: str, operation: str, request: dict[str, Any], idempotency_key: str, now: str) -> dict[str, Any]:
         existing = self.get_by_idempotency(idempotency_key)
         if existing: return existing
-        task = {"id": task_id, "operation": operation, "state": "QUEUED", "execution_mode": "SYNC", "async": False,
+        task = {"id": task_id, "operation": operation, "state": "QUEUED", "task_outcome": "UNKNOWN", "execution_mode": "SYNC", "async": False,
                 "queue_eligibility": "DISPATCHABLE", "attempt_no": 0, "attempt": 0, "fence_token": 0, "revision": 1,
                 "idempotency_key": idempotency_key, "idempotency_scope": "TASK_SUBMISSION", "metadata": {"request": request},
                 "created_at": now, "updated_at": now}
@@ -189,10 +194,11 @@ class RuntimeStore:
         return None if row is None else self._row(row)
 
     def update_task(self, task_id: str, status: str, now: str, result: dict[str, Any] | None = None, error: str | None = None) -> None:
-        state = "COMPLETED" if status == "SUCCEEDED" else "FAILED" if status == "FAILED" else "RUNNING" if status == "RUNNING" else "QUEUED"
+        state = "COMPLETED" if status in {"SUCCEEDED", "COMPLETED"} else "FAILED" if status == "FAILED" else "RUNNING" if status == "RUNNING" else "QUEUED"
+        outcome = "SUCCESS" if status == "SUCCEEDED" else "FAILURE" if status == "FAILED" else "UNKNOWN"
         task = self.get_task(task_id)
         if task is None: raise KeyError(task_id)
-        task.update({"state": state, "report": result, "error": error, "updated_at": now})
+        task.update({"state": state, "task_outcome": outcome, "report": result, "error": error, "updated_at": now})
         self.upsert_task(task)
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
@@ -359,7 +365,8 @@ class RuntimeStore:
         result=dict(row)
         state=result.get("state") or "QUEUED"
         result["state"]=state
-        result["status"]=_STATE_TO_STATUS.get(state,"PENDING")
+        result["task_outcome"]=result.get("task_outcome") or "UNKNOWN"
+        result["status"]=result["task_outcome"]
         result["task_id"]=result.get("task_id")
         result["id"]=result.get("task_id")
         result["request"]=json.loads(result.pop("request_json"))

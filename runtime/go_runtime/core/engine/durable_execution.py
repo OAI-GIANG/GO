@@ -221,7 +221,7 @@ class DurableExecution:
             return True
 
     def finalize(self, task_id: str, fence_token: int, state: str, *, report: dict | None = None,
-                 error: dict | None = None) -> dict:
+                 error: dict | None = None, outcome: str | None = None) -> dict:
         if state not in TERMINAL_STATES:
             raise DurableExecutionError("invalid_terminal_state")
         with self.store.lock:
@@ -232,7 +232,17 @@ class DurableExecution:
                 raise DurableExecutionError("stale_fence_token")
             if task.get("state") in TERMINAL_STATES:
                 return task
+            if outcome is None:
+                if state == "COMPLETED":
+                    outcome = str((report or {}).get("epistemics", {}).get("task_outcome", "UNKNOWN"))
+                elif state in {"FAILED", "CANCELLED", "TIMED_OUT", "ABORTED_BY_KILL"}:
+                    outcome = "FAILURE"
+                else:
+                    outcome = "UNKNOWN"
+            if outcome not in {"SUCCESS", "FAILURE", "UNKNOWN"}:
+                raise DurableExecutionError("invalid_task_outcome")
             task["state"] = state
+            task["task_outcome"] = outcome
             task["queue_eligibility"] = "TERMINAL"
             task["lease_until"] = None
             task["updated_at"] = now_iso()

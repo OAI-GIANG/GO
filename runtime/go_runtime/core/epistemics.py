@@ -92,11 +92,12 @@ def envelope(
     truth_status: str = TruthStatus.UNVERIFIED.value,
     verification_status: str = VerificationStatus.SELF_OBSERVED.value,
     assurance_status: str = AssuranceStatus.UNASSESSED.value,
+    task_outcome: str | None = None,
 ) -> dict[str, Any]:
     """Canonical, non-collapsed epistemic envelope for any result."""
     return {
         "execution_state": ExecutionState(execution_state).value,
-        "task_outcome": derive_task_outcome(execution_state, truth_status, verification_status),
+        "task_outcome": str(task_outcome or derive_task_outcome(execution_state, truth_status, verification_status)),
         "truth_status": TruthStatus(truth_status).value,
         "verification_status": VerificationStatus(verification_status).value,
         "assurance_status": AssuranceStatus(assurance_status).value,
