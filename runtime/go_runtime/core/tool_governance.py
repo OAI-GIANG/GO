@@ -173,7 +173,9 @@ class ToolGovernance:
         try:
             result=self.registry.dispatch(name,arguments,ToolContext(task_id,approval),cid)
             state="COMPLETED" if result.ok else "FAILED"
-            witness=dict(result.witness); witness.update({"scope":f"tool:{name}","subject":auth.subject,"witness_digest":_digest({"call_id":cid,"tool_name":name,"status":state,"output_digest":witness.get("output_digest")})})
+            witness=dict(result.witness)
+            evidence_id="EVID-"+hashlib.sha256((cid+arg_digest+state).encode()).hexdigest()[:24]
+            witness.update({"scope":f"tool:{name}","subject":auth.subject,"authority_id":auth.authority_id,"authorization_id":authorization.authority_id,"execution_id":execution.execution_id,"evidence_id":evidence_id,"witness_digest":_digest({"call_id":cid,"tool_name":name,"status":state,"output_digest":witness.get("output_digest"),"authority_id":auth.authority_id,"authorization_id":authorization.authority_id,"execution_id":execution.execution_id,"evidence_id":evidence_id})})
             self._emit(cid,task_id,name,state,arguments_digest=arg_digest,output=result.output,witness=witness,idempotency_key=key)
             return ToolResult(cid,name,result.ok,result.output,witness)
         except Exception as exc:
