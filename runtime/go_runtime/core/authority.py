@@ -94,6 +94,13 @@ class AuthorityRoot:
     def is_external(self) -> bool:
         return self.provenance() == "EXTERNAL_FILE"
 
+    def _require_external(self) -> None:
+        """P0-A: a root that was auto-generated inside this process (EPHEMERAL /
+        SELF_PROVISIONED) MUST NOT be able to mint authority. Only an externally
+        provisioned / explicitly injected root may issue."""
+        if self.provenance() in {"SELF_PROVISIONED", "EPHEMERAL"}:
+            raise AuthorityError("AUTHORITY_ROOT_NOT_EXTERNAL")
+
     # ---- internal signature ----
     def _payload(self, t: AuthorityToken) -> bytes:
         return json.dumps(
@@ -120,6 +127,7 @@ class AuthorityRoot:
 
     # ---- public issuance (policy-gated) ----
     def issue(self, *, subject: str, scope: Iterable[str], action: str, audience: str, ttl_s: float = 300.0) -> AuthorityToken:
+        self._require_external()
         if not subject or not audience or ttl_s <= 0 or ttl_s > 3600:
             raise AuthorityError("AUTHORITY_ISSUE_POLICY_VIOLATION")
         return self._mint(subject=subject, scope=scope, action=action, audience=audience, ttl_s=ttl_s, parent=None)
@@ -127,6 +135,7 @@ class AuthorityRoot:
     def delegate(self, parent: AuthorityToken, *, subject: str, scope: Iterable[str], action: str, audience: str, ttl_s: float) -> AuthorityToken:
         """ROOT -> DELEGATION -> EXECUTOR. Child scope must be a subset of parent
         scope; child expiry must not exceed parent; action/audience must be covered."""
+        self._require_external()
         if not self.verify(parent, action=parent.action, scope=parent.scope, audience=parent.audience):
             raise AuthorityError("DELEGATION_PARENT_INVALID")
         child = frozenset(str(s) for s in scope)
