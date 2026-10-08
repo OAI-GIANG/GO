@@ -1,6 +1,8 @@
-"""P0-A: authority-root issuance hard-deny (EPHEMERAL/SELF_PROVISIONED) +
-external-root positive path, proven on the REAL execution path (caller -> callee ->
-root provenance -> decision) as well as directly.
+"""P0-A: canonical runtime-owned authority issuance + optional external provenance.
+
+Core HGV2 does not require external trust-domain provisioning. The canonical
+runtime-owned root may issue authority; the security invariant is single-root
+ownership plus fail-closed token verification.
 """
 from __future__ import annotations
 
@@ -20,40 +22,43 @@ def _deny_provenance(monkeypatch):
     return AuthorityRoot.instance()
 
 
-# ---------------- direct issue() negatives ----------------
-def test_direct_issue_denied_for_ephemeral_root():
-    root = AuthorityRoot()  # no injected secret -> EPHEMERAL
-    assert root.provenance() in {"EPHEMERAL", "SELF_PROVISIONED"}
-    with pytest.raises(AuthorityError) as exc:
-        root.issue(subject="s", scope=["runtime"], action="execute", audience="kernel")
-    assert exc.value.code == "AUTHORITY_ROOT_NOT_EXTERNAL"
-
-
-def test_direct_issue_denied_for_self_provisioned_root(monkeypatch):
+# ---------------- runtime-owned root positive path ----------------
+def test_direct_issue_allowed_for_runtime_owned_root(monkeypatch):
     root = _deny_provenance(monkeypatch)
     assert root.provenance() == "SELF_PROVISIONED"
-    with pytest.raises(AuthorityError) as exc:
-        root.issue(subject="s", scope=["runtime"], action="execute", audience="kernel")
-    assert exc.value.code == "AUTHORITY_ROOT_NOT_EXTERNAL"
+    assert root.is_external() is False
+    tok = root.issue(subject="s", scope=["runtime"], action="execute", audience="kernel", ttl_s=60)
+    assert root.verify(tok, action="execute", scope=["runtime"], audience="kernel")
 
 
-def test_delegation_denied_for_non_external_root(monkeypatch):
+def test_delegation_allowed_for_runtime_owned_root(monkeypatch):
     root = _deny_provenance(monkeypatch)
-    # even a fabricated parent cannot be used to mint via a non-external root
-    with pytest.raises(AuthorityError) as exc:
-        root.delegate(None, subject="s", scope=["runtime"], action="execute", audience="kernel", ttl_s=60)
-    assert exc.value.code == "AUTHORITY_ROOT_NOT_EXTERNAL"
+    parent = root.issue(subject="root", scope=["runtime"], action="execute", audience="kernel", ttl_s=60)
+    child = root.delegate(parent, subject="child", scope=["runtime"], action="execute", audience="kernel", ttl_s=30)
+    assert root.verify(child, action="execute", scope=["runtime"], audience="kernel")
 
 
-# ---------------- execution-path negative (caller -> callee -> root) ----------------
-def test_cognitive_authorize_denied_without_external_root(tmp_path, monkeypatch):
+# ---------------- execution-path positive (caller -> callee -> root) ----------------
+def test_cognitive_authorize_allowed_without_external_root(tmp_path, monkeypatch):
     _deny_provenance(monkeypatch)
     store = RuntimeStore(Path(tmp_path) / "go.sqlite3")
     cog = CognitiveService(store, "C", "T", "test")
-    with pytest.raises(AuthorityError) as exc:
-        cog.authorize("TASK-P0A-NEG", "echo")   # caller -> CognitiveService.authorize -> root.issue -> DENY
-    assert exc.value.code == "AUTHORITY_ROOT_NOT_EXTERNAL"
+    auth_id = cog.authorize("TASK-P0A-POS", "echo")
+    assert auth_id
     store.close() if hasattr(store, "close") else None
+
+
+def test_restart_rotates_runtime_owned_root_and_invalidates_old_token(monkeypatch):
+    root = _deny_provenance(monkeypatch)
+    token = root.issue(subject="s", scope=["runtime"], action="execute", audience="kernel", ttl_s=60)
+    AuthorityRoot._instance = None
+    restarted = AuthorityRoot.instance()
+    assert restarted.provenance() == "SELF_PROVISIONED"
+    assert restarted.is_external() is False
+    assert restarted is not root
+    assert not restarted.verify(token, action="execute", scope=["runtime"], audience="kernel")
+    fresh = restarted.issue(subject="s", scope=["runtime"], action="execute", audience="kernel", ttl_s=60)
+    assert restarted.verify(fresh, action="execute", scope=["runtime"], audience="kernel")
 
 
 # ---------------- external-root positive path ----------------

@@ -5,7 +5,7 @@ signed AuthorityToken and present it; they must never mint authority ad-hoc.
 
 Invariants:
   - authority_root_count = 1 (this module holds the only issuing key)
-  - runtime_self_authority = 0 (issuance is policy-gated, no free authority)
+  - runtime_self_authority = 0 (only the canonical root may issue; consumers cannot mint)
   - credential != authority (a credential is an input to the root, not the root)
   - delegation cannot widen scope nor outlive its parent
   - revocation is authoritative; revoked/expired/wrong-audience tokens fail closed
@@ -72,9 +72,14 @@ class AuthorityRoot:
 
     @classmethod
     def _load(cls) -> "AuthorityRoot":
-        """A durable root key must be provisioned EXTERNALLY (owned by another
-        principal). If absent, the process only holds an EPHEMERAL key and MUST
-        NOT be treated as an external authority root."""
+        """Load an optional externally supplied root, otherwise create the
+        canonical runtime-owned root for Personal Production.
+
+        External provenance is optional assurance, not a prerequisite for core
+        HGV2 execution. The runtime-owned root is intentionally process-local;
+        restart rotates the root and therefore invalidates tokens from the
+        previous process.
+        """
         path = os.getenv("HG_AUTHORITY_ROOT_KEY_FILE", "/etc/hg/authority/root.key")
         try:
             secret = open(path, "rb").read().strip()
@@ -93,13 +98,6 @@ class AuthorityRoot:
 
     def is_external(self) -> bool:
         return self.provenance() == "EXTERNAL_FILE"
-
-    def _require_external(self) -> None:
-        """P0-A: a root that was auto-generated inside this process (EPHEMERAL /
-        SELF_PROVISIONED) MUST NOT be able to mint authority. Only an externally
-        provisioned / explicitly injected root may issue."""
-        if self.provenance() in {"SELF_PROVISIONED", "EPHEMERAL"}:
-            raise AuthorityError("AUTHORITY_ROOT_NOT_EXTERNAL")
 
     # ---- internal signature ----
     def _payload(self, t: AuthorityToken) -> bytes:
@@ -127,7 +125,6 @@ class AuthorityRoot:
 
     # ---- public issuance (policy-gated) ----
     def issue(self, *, subject: str, scope: Iterable[str], action: str, audience: str, ttl_s: float = 300.0) -> AuthorityToken:
-        self._require_external()
         if not subject or not audience or ttl_s <= 0 or ttl_s > 3600:
             raise AuthorityError("AUTHORITY_ISSUE_POLICY_VIOLATION")
         return self._mint(subject=subject, scope=scope, action=action, audience=audience, ttl_s=ttl_s, parent=None)
@@ -135,7 +132,6 @@ class AuthorityRoot:
     def delegate(self, parent: AuthorityToken, *, subject: str, scope: Iterable[str], action: str, audience: str, ttl_s: float) -> AuthorityToken:
         """ROOT -> DELEGATION -> EXECUTOR. Child scope must be a subset of parent
         scope; child expiry must not exceed parent; action/audience must be covered."""
-        self._require_external()
         if not self.verify(parent, action=parent.action, scope=parent.scope, audience=parent.audience):
             raise AuthorityError("DELEGATION_PARENT_INVALID")
         child = frozenset(str(s) for s in scope)
