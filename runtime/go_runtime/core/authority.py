@@ -59,6 +59,7 @@ class AuthorityRoot:
 
     def __init__(self, secret: bytes | None = None) -> None:
         self._secret = secret or os.urandom(32)
+        self._provenance = "EXPLICIT" if secret else "EPHEMERAL"
         self._revoked: set[str] = set()
         self._issued: list[dict[str, Any]] = []
 
@@ -66,8 +67,32 @@ class AuthorityRoot:
     def instance(cls) -> "AuthorityRoot":
         with cls._lock:
             if cls._instance is None:
-                cls._instance = AuthorityRoot()
+                cls._instance = cls._load()
             return cls._instance
+
+    @classmethod
+    def _load(cls) -> "AuthorityRoot":
+        """A durable root key must be provisioned EXTERNALLY (owned by another
+        principal). If absent, the process only holds an EPHEMERAL key and MUST
+        NOT be treated as an external authority root."""
+        path = os.getenv("HG_AUTHORITY_ROOT_KEY_FILE", "/etc/hg/authority/root.key")
+        try:
+            secret = open(path, "rb").read().strip()
+            if secret:
+                root = cls(secret)
+                root._provenance = "EXTERNAL_FILE"
+                return root
+        except OSError:
+            pass
+        root = cls()
+        root._provenance = "SELF_PROVISIONED"
+        return root
+
+    def provenance(self) -> str:
+        return getattr(self, "_provenance", "SELF_PROVISIONED")
+
+    def is_external(self) -> bool:
+        return self.provenance() == "EXTERNAL_FILE"
 
     # ---- internal signature ----
     def _payload(self, t: AuthorityToken) -> bytes:
