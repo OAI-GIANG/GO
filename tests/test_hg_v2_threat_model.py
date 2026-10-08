@@ -36,8 +36,11 @@ def test_no_second_authority_issuer():
     assert "AUTHORITY_ROOT_ID" in cog and "AUTHORITY_ROOT_ID" in tg
 
 
-def test_kernel_requires_independent_verification():
-    assert "independent_verification" in _read("go_kernel.py")
+def test_kernel_requires_trusted_verification_result():
+    src = _read("go_kernel.py")
+    assert "independent_verification:" not in src
+    assert "verification_result" in src
+    assert "VerificationResult" in src
 
 
 def test_objective_router_does_not_claim_success():

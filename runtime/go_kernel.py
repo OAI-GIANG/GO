@@ -179,14 +179,19 @@ class Kernel:
             return GateResult.BLOCKED
         return GateResult.ALLOW
 
-    def verify_and_promote_evidence(self, evidence: Evidence, subject: str, scope: str, *, independent_verification: str | None = None) -> tuple[GateResult, Optional[Evidence]]:
-        """V2: promotion to VERIFIED requires INDEPENDENT verification.
+    def verify_and_promote_evidence(self, evidence: Evidence, subject: str, scope: str, *, verification_result) -> tuple[GateResult, Optional[Evidence]]:
+        """Promote only from an immutable VerificationResult produced by the IV&V path."""
+        from runtime.go_runtime.core.ivv import VerificationResult, promotion_gate
 
-        A producer may NOT self-promote its own evidence (removed circular path).
-        Without an independent verification result, nothing is promoted.
-        """
-        if independent_verification != "INDEPENDENTLY_VERIFIED":
+        if not isinstance(verification_result, VerificationResult):
             return GateResult.BLOCKED, None
+        if not isinstance(verification_result.verification_status, str):
+            return GateResult.BLOCKED, None
+        gate = promotion_gate(verification_result)
+        if not gate["promotable"]:
+            return GateResult.BLOCKED, None
+        if evidence.subject != subject or evidence.scope != scope:
+            return GateResult.DENY, None
         promoted = Evidence(
             evidence.evidence_id, evidence.subject, evidence.scope, evidence.source,
             evidence.captured_at, evidence.provenance, evidence.integrity, "VERIFIED", evidence.claim,

@@ -83,7 +83,26 @@ class _Verifier:
         self.verifier_id, self.authority_domain, self.failure_domain = vid, ad, fd
 
     def verify(self, *, claim, evidence, producer_id):
-        return ivv.VerificationResult("INDEPENDENTLY_VERIFIED", "VERIFIED", self.verifier_id, "external-check", "OK", "sha256:x")
+        evidence_digest = ivv._digest({"claim": claim, "evidence": evidence})
+        return ivv._issue_result(
+            verification_status="INDEPENDENTLY_VERIFIED",
+            truth_status="VERIFIED",
+            verifier_id=self.verifier_id,
+            method="external-check",
+            reason="OK",
+            evidence_digest=evidence_digest,
+        )
+
+
+def _trusted_handle(monkeypatch, verifier):
+    spec = ivv.TrustedVerifierSpec(
+        verifier_id=verifier.verifier_id,
+        authority_domain=verifier.authority_domain,
+        failure_domain=verifier.failure_domain,
+        implementation=f"{verifier.__class__.__module__}:{verifier.__class__.__qualname__}",
+    )
+    monkeypatch.setattr(ivv, "TRUSTED_VERIFIER_REGISTRY", (ivv.TrustedVerifierBinding(spec, verifier),))
+    return ivv.get_trusted_verifier(verifier.verifier_id)
 
 
 def test_no_verifier_is_unverified_and_not_promotable():
@@ -92,33 +111,40 @@ def test_no_verifier_is_unverified_and_not_promotable():
     assert ivv.promotion_gate(r)["promotable"] is False
 
 
-def test_producer_cannot_verify_itself():
+def test_producer_cannot_verify_itself(monkeypatch):
     v = _Verifier("p", "a", "f")  # same id AND same domains as producer
-    r = ivv.verify_evidence(claim="c", evidence={}, producer_id="p", producer_authority_domain="a", producer_failure_domain="f", verifier=v)
+    r = ivv.verify_evidence(claim="c", evidence={}, producer_id="p", producer_authority_domain="a", producer_failure_domain="f", verifier=_trusted_handle(monkeypatch, v))
     assert r.verification_status == "VERIFICATION_FAILED" and r.reason == "PRODUCER_EQUALS_VERIFIER"
 
 
-def test_verifier_sharing_domain_is_rejected():
+def test_verifier_sharing_domain_is_rejected(monkeypatch):
     v = _Verifier("v1", "a", "f")  # different id, same authority+failure domain
-    r = ivv.verify_evidence(claim="c", evidence={}, producer_id="p", producer_authority_domain="a", producer_failure_domain="f", verifier=v)
+    r = ivv.verify_evidence(claim="c", evidence={}, producer_id="p", producer_authority_domain="a", producer_failure_domain="f", verifier=_trusted_handle(monkeypatch, v))
     assert r.verification_status == "VERIFICATION_FAILED" and r.reason == "VERIFIER_SHARES_AUTHORITY_DOMAIN"
 
 
-def test_independent_verifier_promotes():
+def test_independent_verifier_promotes(monkeypatch):
     v = _Verifier("external-1", "ext-auth", "ext-fail")
-    r = ivv.verify_evidence(claim="c", evidence={}, producer_id="p", producer_authority_domain="a", producer_failure_domain="f", verifier=v)
+    r = ivv.verify_evidence(claim="c", evidence={}, producer_id="p", producer_authority_domain="a", producer_failure_domain="f", verifier=_trusted_handle(monkeypatch, v))
     assert r.verification_status == "INDEPENDENTLY_VERIFIED"
     assert ivv.promotion_gate(r)["truth_status"] == "VERIFIED"
 
 
 # ---------------------------------------------------------------- circular verification removed (kernel)
-def test_kernel_no_longer_self_promotes():
+def test_kernel_requires_trusted_verification_result():
     ev = Evidence("EVD-1", "t1", "runtime", "src", __import__("datetime").datetime.now(__import__("datetime").timezone.utc),
                   "prov", "integrity", "UNVERIFIED", "claim")
-    gate, promoted = Kernel().verify_and_promote_evidence(ev, "t1", "runtime")
-    assert gate is GateResult.BLOCKED and promoted is None  # no independent verification => no promotion
-    gate2, promoted2 = Kernel().verify_and_promote_evidence(ev, "t1", "runtime", independent_verification="INDEPENDENTLY_VERIFIED")
-    assert gate2 is GateResult.ALLOW and promoted2.verification_status == "VERIFIED"
+    blocked, promoted = Kernel().verify_and_promote_evidence(ev, "t1", "runtime",
+                                                               verification_result=None)
+    assert blocked is GateResult.BLOCKED and promoted is None
+    try:
+        Kernel().verify_and_promote_evidence(
+            ev, "t1", "runtime", independent_verification="INDEPENDENTLY_VERIFIED"
+        )
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("caller-controlled promotion argument must be rejected")
 
 
 # ---------------------------------------------------------------- reconciliation

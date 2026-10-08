@@ -17,6 +17,7 @@ from .vps2_execution_bridge import VPS2ExecutionBridge, BridgeRequest, Operation
 from .cognitive import CognitiveService
 from .tool_runtime import default_tool_registry
 from .tool_governance import ToolGovernance, ToolGovernanceError
+from runtime import go_kernel
 from runtime.go_kernel import GateResult
 
 VERSION = "0.1.1"
@@ -45,6 +46,7 @@ class GOApplication:
         self.store=RuntimeStore(config.data_path)
         self.durable=DurableExecution(self.store)
         self.cognitive=CognitiveService(self.store,config.commit,config.tree,config.environment)
+        self.kernel=go_kernel.Kernel()
         self.tools=default_tool_registry()
         self.durable.recover_orphans()
         self.store.set_meta("version",VERSION); self.store.set_meta("commit",config.commit); self.store.set_meta("tree",config.tree); self.store.set_meta("started_at",utc_now())
@@ -135,12 +137,24 @@ class GOApplication:
         verification = ivv.verify_evidence(
             claim=str(evidence.get("claim") or ""), evidence=evidence, producer_id="go_runtime.runtime",
             producer_authority_domain="runtime", producer_failure_domain="runtime",
-            verifier=getattr(self, "_ivv_verifier", None),
+            verifier=ivv.get_trusted_verifier(),
         )
-        ivv.promotion_gate(verification)  # admission: no self-promotion without independent verification
-        evidence["verification_status"] = verification.verification_status
-        evidence["truth_status"] = verification.truth_status
-        self.store.save_evidence(evidence, evidence["captured_at"])
+        evidence_obj = go_kernel.Evidence(
+            str(evidence["evidence_id"]), "go_runtime.runtime", "MODEL_EXECUTION", str(evidence["source"]),
+            evidence["captured_at"], str(evidence.get("provenance") or ""), str(evidence["integrity"]),
+            "UNVERIFIED", str(evidence.get("claim") or ""),
+        )
+        promotion_status, promoted = self.kernel.verify_and_promote_evidence(
+            evidence_obj, task_id, "MODEL_EXECUTION", verification_result=verification
+        )
+        if promotion_status is go_kernel.GateResult.ALLOW and promoted is not None:
+            evidence["verification_status"] = promoted.verification_status
+            evidence["truth_status"] = verification.truth_status
+            self.store.save_evidence(evidence, evidence["captured_at"])
+        else:
+            evidence["verification_status"] = "UNVERIFIED"
+            evidence["truth_status"] = "UNVERIFIED"
+            self.store.save_evidence(evidence, evidence["captured_at"])
         replay=self.cognitive.emit_replay(task_id,"MODEL_EXECUTION",{"operation":operation,"output":output,"evidence_id":evidence["evidence_id"]})
         memory=self.cognitive.observe_memory(task_id,payload,evidence["evidence_id"])
         result={**output,"task_id":task_id,"cognitive":{"advice":advice.recommendation,"memory_ids":list(advice.memory_ids),"evidence_ids":list(advice.evidence_ids),"context_used":bool(context),"go_context":context},"evidence_id":evidence["evidence_id"],"replay_id":replay["replay_id"],
