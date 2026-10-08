@@ -212,7 +212,7 @@ def compute_provider_performance_memory(
     tasks: list[dict],
     *,
     capability_id: str = "reasoning",
-    provider_id: str = "deepseek.model",
+    provider_id: str = "UNSPECIFIED",
     model_id: str | None = None,
     source_commit: str = "UNDECLARED",
     source_tree_sha: str | None = None,
