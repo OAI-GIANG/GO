@@ -88,8 +88,8 @@ def capability_profile() -> tuple[str, tuple[str, ...]]:
     name = os.getenv("HG_TOOL_CAPABILITY_PROFILE", "").strip()
     if name == "HG_READONLY_V1":
         return name, READONLY_CAPABILITY_PROFILE
-    if name == "HG_FULL_V1":
-        return name, ("*",)
+    # No wildcard/full-access profile: every bounded profile must enumerate
+    # capabilities explicitly so adding a new tool never grants it implicitly.
     return name, ()
 
 

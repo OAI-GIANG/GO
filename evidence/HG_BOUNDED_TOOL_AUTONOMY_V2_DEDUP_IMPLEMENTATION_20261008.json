@@ -28,6 +28,8 @@
     ],
     "design": "Existing Authority remains the grant primitive; HG_READONLY_V1 is a server-owned capability profile. No CapabilityGrant engine or second governance plane was created.",
     "server_side_enforcement": true,
+    "explicit_allowlist_only": true,
+    "wildcard_profile": false,
     "objective_catalogue_filtered_by_capability": true,
     "final_execution_rechecks_capability": true,
     "fail_closed_without_profile": true,
