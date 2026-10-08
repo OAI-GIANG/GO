@@ -121,7 +121,8 @@ class GOApplication:
         return sorted({"echo","ask"}|names)
 
     def status(self)->dict[str,Any]:
-        return {"name":"GO","version":VERSION,"status":"RUNNING","host":socket.gethostname(),"commit":self.config.commit,"tree":self.config.tree,"environment":self.config.environment,"data_path":str(self.config.data_path),"started_at":self.store.get_meta("started_at"),"operations":self._operations(),"integration":"GO_NATIVE_ENGINE"}
+        governance = ToolGovernance(self.tools)
+        return {"name":"GO","version":VERSION,"status":"RUNNING","host":socket.gethostname(),"commit":self.config.commit,"tree":self.config.tree,"environment":self.config.environment,"data_path":str(self.config.data_path),"started_at":self.store.get_meta("started_at"),"operations":self._operations(),"capability_profile":governance.capability_profile_info(),"integration":"GO_NATIVE_ENGINE"}
 
     def execute(self, task_id:str, operation:str, payload:dict[str,Any])->dict[str,Any]:
         request=__import__("runtime.go_runtime.core.contracts",fromlist=["CognitiveRequest"]).CognitiveRequest(task_id,operation,payload,self.config.commit,self.config.tree,self.config.environment)
@@ -168,7 +169,12 @@ class GOApplication:
         objective = str(payload.get("objective") or payload.get("text") or "").strip()
         if not objective:
             raise ValueError("objective is required")
-        catalogue = orx.discover(self.tools)
+        governance = ToolGovernance(self.tools)
+        discovered = orx.discover(self.tools)
+        # Discovery is not authority: only capabilities delegated by the
+        # server-side profile enter objective selection. execute_tool() still
+        # re-checks the same policy at the final authorization boundary.
+        catalogue = [c for c in discovered if governance.capability_allowed(c["operation"])]
         attempt: dict[str, int] = {}
 
         def execute(operation: str, step_payload: dict[str, Any], step_approval: str) -> tuple[bool, dict[str, Any], dict[str, Any]]:

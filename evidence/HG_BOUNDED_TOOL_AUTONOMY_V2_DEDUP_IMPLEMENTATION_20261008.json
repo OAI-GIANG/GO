@@ -1,0 +1,65 @@
+{
+  "evidence_id": "HG_BOUNDED_TOOL_AUTONOMY_V2_DEDUP_IMPLEMENTATION_20261008",
+  "status": "IMPLEMENTED_TESTED",
+  "baseline": {
+    "repository": "OAI-GIANG/GO",
+    "branch": "hg-core",
+    "head": "a4d453519ea8994650cb520606eb013ddca8896e"
+  },
+  "deduplication": {
+    "existing_authority": "go_kernel.Authority + Authorization already bind subject, tool scope, task context, expiry and provenance",
+    "existing_governance": "ToolGovernance already owns schema validation, authorization, approval, execution gate, ledger, witness and replay",
+    "existing_objective_router": "objective_router already owns discovery, bounded selection, failure taxonomy, retry and replan",
+    "existing_execution": "DurableExecution remains the sole durable execution owner",
+    "existing_evidence": "ToolEventLedger/witness/evidence/replay primitives reused",
+    "existing_vps": "VPS2ExecutionBridge and prior live evidence reused; no second VPS executor",
+    "new_parallel_subsystem": false
+  },
+  "true_gap": {
+    "finding": "HG_SESSION authorization could reach any registered tool once provenance was valid; server-side capability delegation was not an explicit allowlist",
+    "secondary_finding": "objective filtering could semantically downgrade an unavailable mutation objective into an available read capability"
+  },
+  "implementation": {
+    "files_changed": [
+      "runtime/go_runtime/core/tool_governance.py",
+      "runtime/go_runtime/core/server.py",
+      "runtime/go_runtime/core/engine/objective_router.py",
+      "tests/test_capability_delegation_v2.py"
+    ],
+    "design": "Existing Authority remains the grant primitive; HG_READONLY_V1 is a server-owned capability profile. No CapabilityGrant engine or second governance plane was created.",
+    "server_side_enforcement": true,
+    "objective_catalogue_filtered_by_capability": true,
+    "final_execution_rechecks_capability": true,
+    "fail_closed_without_profile": true,
+    "request_cannot_widen_profile": true,
+    "semantic_downgrade_blocked": true
+  },
+  "read_only_profile": [
+    "go.status",
+    "github.read_repo",
+    "github.read_branch",
+    "github.read_file",
+    "github.read_releases",
+    "vps1.edge.health",
+    "vps2.health"
+  ],
+  "tests": {
+    "targeted": "21 passed",
+    "full_regression": "102 passed",
+    "diff_check": "PASS",
+    "py_compile": "PASS"
+  },
+  "canonical_safety": {
+    "merge": false,
+    "production_deploy": false,
+    "canonical_hg_core_modified": false,
+    "credential_exposed": false,
+    "bypass": false
+  },
+  "runtime_boundary": {
+    "branch_runtime_live_e2e": "NOT_RUN",
+    "canonical_runtime_live_e2e_after_patch": "NOT_RUN",
+    "reason": "Patch is intentionally isolated on a verification branch; deployment/merge is outside this mandate's authority boundary."
+  },
+  "verdict": "DEDUPLICATED_IMPLEMENTATION_TESTED_LIVE_DEPLOYMENT_PENDING"
+}

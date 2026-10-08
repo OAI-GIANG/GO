@@ -66,6 +66,33 @@ class ToolEventLedger:
         with self.lock:
             with self.path.open("a",encoding="utf-8") as f: f.write(json.dumps(event,ensure_ascii=False,sort_keys=True)+"\n")
 
+READONLY_CAPABILITY_PROFILE = (
+    "go.status",
+    "github.read_repo",
+    "github.read_branch",
+    "github.read_file",
+    "github.read_releases",
+    "vps1.edge.health",
+    "vps2.health",
+)
+
+
+def capability_profile() -> tuple[str, tuple[str, ...]]:
+    """Return the server-side capability profile; caller input cannot widen it.
+
+    The profile is policy configuration owned by the GO runtime, not a tool or
+    execution subsystem.  HG_SESSION subjects fail closed when no profile is
+    configured.  Test/legacy callers may explicitly select a profile by
+    environment, never by request payload.
+    """
+    name = os.getenv("HG_TOOL_CAPABILITY_PROFILE", "").strip()
+    if name == "HG_READONLY_V1":
+        return name, READONLY_CAPABILITY_PROFILE
+    if name == "HG_FULL_V1":
+        return name, ("*",)
+    return name, ()
+
+
 class ToolGovernance:
     def __init__(self,registry:ToolRegistry, ledger_path:Path|None=None):
         self.registry=registry; self.kernel=Kernel(); self.ledger=ToolEventLedger(ledger_path or Path(os.getenv("HG_TOOL_EVENT_LEDGER","./data/tool-events.jsonl")))
@@ -83,6 +110,25 @@ class ToolGovernance:
         if not subject.startswith("HG_SESSION_"): return None
         now=now_utc()
         return Authority("AUTH-TOOL-"+hashlib.sha256((subject+tool_name).encode()).hexdigest()[:16],subject,frozenset({f"tool:{tool_name}"}),frozenset({"execute"}),"HG_KERNEL",now,now+timedelta(minutes=5),frozenset({task_id}),"ACTIVE",provenance)
+    def _capability_check(self, tool_name: str) -> tuple[bool, str, str]:
+        subject = os.getenv("HG_TOOL_AUTHORITY_SUBJECT", "").strip()
+        profile, allowed = capability_profile()
+        # Canonical HG session authority is fail-closed unless a server-side
+        # profile has explicitly delegated the requested capability.
+        if subject.startswith("HG_SESSION_"):
+            if not profile:
+                return False, "CAPABILITY_PROFILE_MISSING", profile
+            if "*" not in allowed and tool_name not in allowed:
+                return False, "CAPABILITY_NOT_GRANTED", profile
+        return True, "AUTHORIZED", profile
+
+    def capability_allowed(self, tool_name: str) -> bool:
+        return self._capability_check(tool_name)[0]
+
+    def capability_profile_info(self) -> dict[str, Any]:
+        name, allowed = capability_profile()
+        return {"name": name or None, "allowed": list(allowed), "digest": _digest({"name": name, "allowed": list(allowed)})}
+
     def execute(self,task_id:str,name:str,arguments:dict[str,Any],approval="not_required",call_id=None)->ToolResult:
         adapter=self.registry._tools.get(name)
         if adapter is None: raise ToolGovernanceError("TOOL_NOT_FOUND")
@@ -98,7 +144,11 @@ class ToolGovernance:
             if e.get("idempotency_key")==key and e.get("state") in TERMINAL: duplicate=e; break
         if duplicate and duplicate.get("call_id")!=cid:
             return ToolResult(cid,name,duplicate.get("state")=="COMPLETED",duplicate.get("output",{"error":"DUPLICATE_IDEMPOTENCY_KEY"}),duplicate.get("witness",{}))
-        self._emit(cid,task_id,name,"ACCEPTED",arguments_digest=arg_digest,idempotency_key=key)
+        allowed, reason, profile = self._capability_check(name)
+        if not allowed:
+            self._emit(cid,task_id,name,"DENIED",reason=reason,capability_profile=profile,arguments_digest=arg_digest)
+            return ToolResult(cid,name,False,{"error":reason,"capability_profile":profile or None},{"call_id":cid,"tool_name":name,"task_id":task_id,"status":"DENIED","error_type":reason,"capability_profile":profile or None,"contract_version":"TOOL-GOVERNANCE-V1"})
+        self._emit(cid,task_id,name,"ACCEPTED",arguments_digest=arg_digest,idempotency_key=key,capability_profile=profile)
         try: validate_schema(spec.input_schema,arguments)
         except ToolGovernanceError as exc:
             self._emit(cid,task_id,name,"DENIED",reason=exc.code,arguments_digest=arg_digest)

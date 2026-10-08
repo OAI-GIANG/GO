@@ -258,6 +258,10 @@ def select(objective: str, catalogue: list[dict[str, Any]], *, default_ref: str 
         if steps:
             result.update({"status": "SELECTED", "selected": steps[0], "steps": steps})
             return result
+        result.update({"status": "CAPABILITY_UNAVAILABLE", "refusal": {"code": "CAPABILITY_UNAVAILABLE", "requested_operations": [
+            "github.create_branch", "github.write_file", "github.delete_branch"
+        ]}})
+        return result
     # primary action = first explicit verb + first noun
     verb = u["verbs"][0] if u["verbs"] else "read"
     noun = u["nouns"][0] if u["nouns"] else None
@@ -265,6 +269,9 @@ def select(objective: str, catalogue: list[dict[str, Any]], *, default_ref: str 
         step = _plan_step(verb, noun, e)
         if step and step["operation"] in names:
             result.update({"status": "SELECTED", "selected": step, "steps": [step]})
+            return result
+        if step and step["operation"] not in names:
+            result.update({"status": "CAPABILITY_UNAVAILABLE", "refusal": {"code": "CAPABILITY_UNAVAILABLE", "requested_operation": step["operation"]}})
             return result
     # generic token-overlap fallback (never a single fixed tool)
     toks = set(u["tokens"])
