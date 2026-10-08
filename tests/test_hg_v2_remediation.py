@@ -10,7 +10,7 @@ import os
 import pytest
 
 from runtime.go_kernel import Evidence, GateResult, Kernel
-from runtime.go_runtime.core import epistemics, ivv, reconciliation, provenance, assurance, certification_firewall, intelligence_eval
+from runtime.go_runtime.core import epistemics, ivv, reconciliation, provenance, assurance, evidence, certification_firewall, intelligence_eval
 from runtime.go_runtime.core.authority import AuthorityRoot, AuthorityError, AuthorityToken, require_authority
 
 
@@ -176,30 +176,51 @@ def test_assurance_profile_and_case():
         assurance.case_step(claim="", risk="r", control="k", test="t", evidence="e", verifier="v", assurance="a")
 
 
-def test_certification_firewall_blocks_on_collisions_and_self_assertion():
-    out = certification_firewall.required_checks(
-        authority_root_count=2, runtime_self_authority=1, runtime_self_verification=1, runtime_self_certification=1,
-        producer_self_verification=1, credential_is_authority=False, completed_implies_success=True,
-        success_implies_truth=True, unknown_is_first_class=False, stale_proof_accepted=True, provenance_bound=False,
-        external_unknown_reconciliation=False, memory_self_certification=True, duplicate_semantic_owner=4,
-        orphan_semantic=8, critical_injection_blocked=False, ivv_status="BLOCKED", intelligence_ground_truth=False,
-        threat_tests_present=False, assurance_case_complete=False,
+def _firewall_evidence(check: str, value: bool, status: str = "INDEPENDENTLY_VERIFIED", truth: str = "VERIFIED"):
+    return evidence.CanonicalEvidence(
+        evidence_id="fw-" + check,
+        subject="certification",
+        producer="independent-certifier",
+        claim="firewall criterion " + check,
+        observation={"firewall_check": check, "value": value},
+        integrity="sha256:fixture",
+        provenance={"source": "independent-test"},
+        verification_status=status,
+        truth_status=truth,
+        assurance_status="ASSESSED",
+        verifier="verifier-B",
+        captured_at="2026-10-08T00:00:00+00:00",
     )
+
+
+def test_certification_firewall_blocks_unverified_or_missing_evidence():
+    items = [_firewall_evidence(name, True) for name in certification_firewall.REQUIRED_CHECKS[:-1]]
+    out = certification_firewall.evaluate_evidence_backed(items)
     assert out["result"] == "CERTIFICATION_BLOCKED"
-    assert "authority_root_count_eq_1" in out["failed"]
+    assert "assurance_case_complete" in out["failed"]
     assert out["self_assertion_permitted"] is False
 
 
-def test_certification_firewall_ready_when_all_pass():
-    out = certification_firewall.required_checks(
-        authority_root_count=1, runtime_self_authority=0, runtime_self_verification=0, runtime_self_certification=0,
-        producer_self_verification=0, credential_is_authority=False, completed_implies_success=False,
-        success_implies_truth=False, unknown_is_first_class=True, stale_proof_accepted=False, provenance_bound=True,
-        external_unknown_reconciliation=True, memory_self_certification=False, duplicate_semantic_owner=0,
-        orphan_semantic=0, critical_injection_blocked=True, ivv_status="INDEPENDENTLY_VERIFIED",
-        intelligence_ground_truth=True, threat_tests_present=True, assurance_case_complete=True,
-    )
+def test_certification_firewall_blocks_false_verified_evidence():
+    items = [_firewall_evidence(name, True) for name in certification_firewall.REQUIRED_CHECKS]
+    items[0] = _firewall_evidence(certification_firewall.REQUIRED_CHECKS[0], False)
+    out = certification_firewall.evaluate_evidence_backed(items)
+    assert out["result"] == "CERTIFICATION_BLOCKED"
+    assert certification_firewall.REQUIRED_CHECKS[0] in out["failed"]
+
+
+def test_certification_firewall_ready_only_from_complete_verified_evidence():
+    items = [_firewall_evidence(name, True) for name in certification_firewall.REQUIRED_CHECKS]
+    out = certification_firewall.evaluate_evidence_backed(items)
     assert out["result"] == "CERTIFICATION_READY"
+    assert len(out["evidence_refs"]) == len(certification_firewall.REQUIRED_CHECKS)
+
+
+def test_certification_firewall_rejects_self_observed_certification_evidence():
+    items = [_firewall_evidence(name, True) for name in certification_firewall.REQUIRED_CHECKS]
+    items[0] = _firewall_evidence(certification_firewall.REQUIRED_CHECKS[0], True, status="SELF_OBSERVED")
+    out = certification_firewall.evaluate_evidence_backed(items)
+    assert out["result"] == "CERTIFICATION_BLOCKED"
 
 
 # ---------------------------------------------------------------- intelligence evaluation

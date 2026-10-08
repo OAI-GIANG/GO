@@ -1,21 +1,52 @@
 """HG V2 Certification Firewall.
 
-An executable gate that lives OUTSIDE the runtime self-assertion path. The runtime
-cannot declare itself CERTIFIED. The firewall rejects certification if any critical
-dimension is missing, self-issued, stale, or unbound.
+The firewall is an external admission gate. It does not accept caller-supplied
+booleans/statuses as certification truth. It consumes canonical evidence only.
+
+P0-D invariant:
+CanonicalEvidence -> integrity/provenance/IVV/truth validation -> firewall checks
+-> CERTIFICATION_READY/BLOCKED.
+
+Authority, provenance and evidence semantics remain owned by their existing
+canonical modules.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterable
+
+from .evidence import CanonicalEvidence
 
 
-def evaluate(checks: dict[str, bool], *, blockers: list[str] | None = None) -> dict[str, Any]:
-    """checks: named CRITICAL conditions that must all be TRUE to be READY."""
+REQUIRED_CHECKS = (
+    "authority_root_count_eq_1",
+    "runtime_self_authority_eq_0",
+    "runtime_self_verification_eq_0",
+    "runtime_self_certification_eq_0",
+    "producer_self_verification_eq_0",
+    "credential_is_not_authority",
+    "completed_does_not_imply_success",
+    "success_does_not_imply_truth",
+    "unknown_is_first_class",
+    "stale_proof_not_accepted",
+    "provenance_bound",
+    "external_unknown_reconciliation",
+    "memory_self_certification_eq_0",
+    "duplicate_semantic_owner_eq_0",
+    "orphan_semantic_eq_0",
+    "critical_injection_blocked",
+    "independent_verification",
+    "intelligence_ground_truth",
+    "threat_tests_present",
+    "assurance_case_complete",
+)
+
+
+def _evaluate_checks(checks: dict[str, bool], *, blockers: list[str] | None = None) -> dict[str, Any]:
     failed = sorted(k for k, v in checks.items() if v is not True)
     extra = list(blockers or [])
     ready = not failed and not extra
     return {
-        "schema": "HG_CERTIFICATION_FIREWALL_V1",
+        "schema": "HG_CERTIFICATION_FIREWALL_V2",
         "result": "CERTIFICATION_READY" if ready else "CERTIFICATION_BLOCKED",
         "passed": sorted(k for k, v in checks.items() if v is True),
         "failed": failed,
@@ -24,54 +55,64 @@ def evaluate(checks: dict[str, bool], *, blockers: list[str] | None = None) -> d
     }
 
 
-def required_checks(
+def _valid_canonical_evidence(item: CanonicalEvidence) -> bool:
+    if not isinstance(item, CanonicalEvidence):
+        return False
+    if not item.evidence_id or not item.producer or not item.provenance:
+        return False
+    if item.verification_status != "INDEPENDENTLY_VERIFIED":
+        return False
+    if item.truth_status != "VERIFIED":
+        return False
+    payload = item.to_dict()
+    return payload.get("evidence_digest") == item.to_dict().get("evidence_digest")
+
+
+def evaluate_evidence_backed(
+    evidence_items: Iterable[CanonicalEvidence],
     *,
-    authority_root_count: int,
-    runtime_self_authority: int,
-    runtime_self_verification: int,
-    runtime_self_certification: int,
-    producer_self_verification: int,
-    credential_is_authority: bool,
-    completed_implies_success: bool,
-    success_implies_truth: bool,
-    unknown_is_first_class: bool,
-    stale_proof_accepted: bool,
-    provenance_bound: bool,
-    external_unknown_reconciliation: bool,
-    memory_self_certification: bool,
-    duplicate_semantic_owner: int,
-    orphan_semantic: int,
-    critical_injection_blocked: bool,
-    ivv_status: str,
-    intelligence_ground_truth: bool,
-    threat_tests_present: bool,
-    assurance_case_complete: bool,
+    blockers: list[str] | None = None,
 ) -> dict[str, Any]:
-    checks = {
-        "authority_root_count_eq_1": authority_root_count == 1,
-        "runtime_self_authority_eq_0": runtime_self_authority == 0,
-        "runtime_self_verification_eq_0": runtime_self_verification == 0,
-        "runtime_self_certification_eq_0": runtime_self_certification == 0,
-        "producer_self_verification_eq_0": producer_self_verification == 0,
-        "credential_is_not_authority": credential_is_authority is False,
-        "completed_does_not_imply_success": completed_implies_success is False,
-        "success_does_not_imply_truth": success_implies_truth is False,
-        "unknown_is_first_class": unknown_is_first_class is True,
-        "stale_proof_not_accepted": stale_proof_accepted is False,
-        "provenance_bound": provenance_bound is True,
-        "external_unknown_reconciliation": external_unknown_reconciliation is True,
-        "memory_self_certification_eq_0": memory_self_certification is False,
-        "duplicate_semantic_owner_eq_0": duplicate_semantic_owner == 0,
-        "orphan_semantic_eq_0": orphan_semantic == 0,
-        "critical_injection_blocked": critical_injection_blocked is True,
-        "independent_verification": ivv_status == "INDEPENDENTLY_VERIFIED",
-        "intelligence_ground_truth": intelligence_ground_truth is True,
-        "threat_tests_present": threat_tests_present is True,
-        "assurance_case_complete": assurance_case_complete is True,
-    }
-    external = []
-    if ivv_status != "INDEPENDENTLY_VERIFIED":
-        external.append("IVV_BLOCKED")
-    if not intelligence_ground_truth:
-        external.append("GROUND_TRUTH_BLOCKED")
-    return evaluate(checks, blockers=external)
+    """Evaluate certification only from canonical, independently verified evidence.
+
+    Each criterion must be represented by exactly one canonical evidence record
+    whose observation contains:
+        {"firewall_check": "<criterion>", "value": true|false}
+
+    Missing, duplicate, unverified, unverifiable, or false criteria fail closed.
+    """
+    items = list(evidence_items)
+    by_check: dict[str, list[CanonicalEvidence]] = {}
+    invalid: list[str] = []
+
+    for item in items:
+        if not _valid_canonical_evidence(item):
+            invalid.append(str(getattr(item, "evidence_id", "INVALID_EVIDENCE")))
+            continue
+        check = str((item.observation or {}).get("firewall_check") or "")
+        if not check:
+            invalid.append(item.evidence_id)
+            continue
+        by_check.setdefault(check, []).append(item)
+
+    checks: dict[str, bool] = {}
+    evidence_refs: dict[str, str] = {}
+
+    for check in REQUIRED_CHECKS:
+        matches = by_check.get(check, [])
+        if len(matches) != 1:
+            checks[check] = False
+            continue
+        item = matches[0]
+        checks[check] = (item.observation or {}).get("value") is True
+        evidence_refs[check] = item.evidence_id
+
+    extra_checks = sorted(set(by_check) - set(REQUIRED_CHECKS))
+    result = _evaluate_checks(checks, blockers=list(blockers or []) + (
+        ["INVALID_CANONICAL_EVIDENCE"] if invalid else []
+    ))
+
+    result["evidence_refs"] = evidence_refs
+    result["invalid_evidence_ids"] = sorted(set(invalid))
+    result["unexpected_checks"] = extra_checks
+    return result
