@@ -102,11 +102,12 @@ class ToolGovernance:
     def _transition(self,call_id,task_id,tool_name,current,new,**extra):
         if new not in TRANSITIONS.get(current,set()): raise ToolGovernanceError("INVALID_TOOL_STATE_TRANSITION",f"{current}->{new}")
         return self._emit(call_id,task_id,tool_name,new,previous_state=current,**extra)
-    def _authority(self,task_id,tool_name):
-        provenance=os.getenv("HG_TOOL_AUTHORITY_PROVENANCE","").strip()
+    def _authority(self,task_id,tool_name,provenance=None):
+        provenance=(provenance or os.getenv("HG_TOOL_AUTHORITY_PROVENANCE","")).strip()
         expected=os.getenv("HG_TOOL_AUTHORITY_PROVENANCE_EXPECTED","").strip()
         subject=os.getenv("HG_TOOL_AUTHORITY_SUBJECT","").strip()
-        if not task_id or not provenance or not expected or provenance != expected: return None
+        if not task_id or not provenance: return None
+        if expected and provenance != expected: return None
         if not subject.startswith("HG_SESSION_"): return None
         now=now_utc()
         return Authority("AUTH-TOOL-"+hashlib.sha256((subject+tool_name).encode()).hexdigest()[:16],subject,frozenset({f"tool:{tool_name}"}),frozenset({"execute"}),"HG_KERNEL",now,now+timedelta(minutes=5),frozenset({task_id}),"ACTIVE",provenance)
@@ -129,7 +130,7 @@ class ToolGovernance:
         name, allowed = capability_profile()
         return {"name": name or None, "allowed": list(allowed), "digest": _digest({"name": name, "allowed": list(allowed)})}
 
-    def execute(self,task_id:str,name:str,arguments:dict[str,Any],approval="not_required",call_id=None)->ToolResult:
+    def execute(self,task_id:str,name:str,arguments:dict[str,Any],approval="not_required",call_id=None,provenance=None)->ToolResult:
         adapter=self.registry._tools.get(name)
         if adapter is None: raise ToolGovernanceError("TOOL_NOT_FOUND")
         spec=adapter.spec(); cid=call_id or "CALL-"+uuid.uuid4().hex
@@ -155,7 +156,7 @@ class ToolGovernance:
             return ToolResult(cid,name,False,{"error":exc.code,"message":str(exc)},{"call_id":cid,"tool_name":name,"task_id":task_id,"status":"DENIED","arguments_digest":arg_digest,"error_type":exc.code,"contract_version":"TOOL-GOVERNANCE-V1"})
         self._transition(cid,task_id,name,"ACCEPTED","VALIDATED",arguments_digest=arg_digest,idempotency_key=key)
         self._transition(cid,task_id,name,"VALIDATED","AUTHORIZATION_PENDING",arguments_digest=arg_digest)
-        auth=self._authority(task_id,name)
+        auth=self._authority(task_id,name,provenance=provenance)
         if auth is None:
             self._emit(cid,task_id,name,"DENIED",reason="AUTHORITY_PROVENANCE_MISSING",arguments_digest=arg_digest)
             return ToolResult(cid,name,False,{"error":"AUTHORITY_PROVENANCE_MISSING"},{"call_id":cid,"tool_name":name,"task_id":task_id,"status":"DENIED","arguments_digest":arg_digest,"contract_version":"TOOL-GOVERNANCE-V1"})
