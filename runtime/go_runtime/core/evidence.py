@@ -83,23 +83,56 @@ def from_store_record(rec: dict[str, Any]) -> CanonicalEvidence:
 def from_checkpoint_ref(ref: dict[str, Any]) -> CanonicalEvidence:
     return CanonicalEvidence(
         evidence_id=str(ref.get("evidence_id", "")), subject="", producer="checkpoint",
-        claim="checkpoint evidence reference", observation={},
+        claim="checkpoint evidence reference", observation={"checkpoint_ref": True},
         integrity=str(ref.get("evidence_digest", "")), provenance={"checkpoint": True},
         verification_status=str(ref.get("verification_status", "UNVERIFIED")), truth_status="UNVERIFIED",
         assurance_status="UNASSESSED", verifier=None, captured_at="",
     )
 
 
+def from_ledger_event(
+    *,
+    event_id: str,
+    task_id: str | None,
+    event_type: str,
+    payload: dict[str, Any],
+    occurred_at: str,
+) -> CanonicalEvidence:
+    """Adapter for the audit-event ledger; canonical evidence remains the owner."""
+    evidence_id = str(payload.get("evidence_id") or f"LEDGER-{event_id}")
+    return CanonicalEvidence(
+        evidence_id=evidence_id,
+        subject=str(task_id or ""),
+        producer=str(payload.get("producer") or "ledger"),
+        claim=str(payload.get("claim") or event_type),
+        observation={"event_type": event_type, "payload": dict(payload)},
+        integrity=str(payload.get("integrity") or payload.get("witness_digest") or ""),
+        provenance={"ledger_event_id": str(event_id), "occurred_at": occurred_at},
+        verification_status=str(payload.get("verification_status") or "UNVERIFIED"),
+        truth_status=str(payload.get("truth_status") or "UNVERIFIED"),
+        assurance_status=str(payload.get("assurance_status") or "UNASSESSED"),
+        verifier=payload.get("verifier"),
+        captured_at=occurred_at,
+    )
+
+
 def unify(items: list[CanonicalEvidence]) -> dict[str, Any]:
-    """Project heterogeneous evidence into one canonical set + duplicate detection."""
+    """Canonicalize heterogeneous evidence and detect duplicates/conflicts."""
     by_id: dict[str, list[CanonicalEvidence]] = {}
     for it in items:
         by_id.setdefault(it.evidence_id, []).append(it)
     duplicates = {k: len(v) for k, v in by_id.items() if len(v) > 1}
+    conflicts = {}
+    for key, values in by_id.items():
+        digests = {v.to_dict()["evidence_digest"] for v in values}
+        if len(digests) > 1:
+            conflicts[key] = sorted(digests)
+    canonical = [v[0].to_dict() for v in by_id.values()]
     return {
         "schema": EVIDENCE_SCHEMA,
-        "canonical": [v[0].to_dict() for v in by_id.values()],
+        "canonical": canonical,
         "count": len(by_id),
         "duplicate_representations": duplicates,
-        "unified_digest": _digest([sorted(v[0].to_dict().items()) for v in by_id.values()]),
+        "conflicts": conflicts,
+        "unified_digest": _digest([sorted(values[0].to_dict().items()) for values in by_id.values()]),
     }

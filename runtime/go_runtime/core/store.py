@@ -206,6 +206,16 @@ class RuntimeStore:
         with self._lock, self._connection() as conn:
             conn.execute("INSERT INTO audit_events(task_id,event_type,payload_json,occurred_at) VALUES(?,?,?,?)", (task_id,event_type,json.dumps(payload,sort_keys=True),now)); conn.commit()
 
+    def list_audit_events(self, task_id: str | None = None) -> list[dict[str, Any]]:
+        with self._connection() as conn:
+            rows = (conn.execute("SELECT event_id,task_id,event_type,payload_json,occurred_at FROM audit_events WHERE task_id=? ORDER BY event_id", (task_id,)).fetchall()
+                    if task_id else conn.execute("SELECT event_id,task_id,event_type,payload_json,occurred_at FROM audit_events ORDER BY event_id").fetchall())
+        return [{"event_id": row[0], "task_id": row[1], "event_type": row[2], "payload": json.loads(row[3]), "occurred_at": row[4]} for row in rows]
+
+    def unified_audit_evidence(self, task_id: str | None = None) -> dict[str, Any]:
+        from .evidence import from_ledger_event, unify
+        return unify([from_ledger_event(**event) for event in self.list_audit_events(task_id)])
+
     def save_memory(self, record: dict[str, Any], now: str) -> None:
         with self._lock, self._connection() as conn:
             conn.execute("INSERT OR REPLACE INTO memory_records(memory_id,normalized_key,scope,record_json,created_at) VALUES(?,?,?,?,?)", (record["memory_id"],record["normalized_key"],record["scope"],json.dumps(record,sort_keys=True),now)); conn.commit()
@@ -240,6 +250,10 @@ class RuntimeStore:
         with self._connection() as conn:
             rows=conn.execute("SELECT record_json FROM evidence_records WHERE task_id=? ORDER BY occurred_at",(task_id,)).fetchall() if task_id else conn.execute("SELECT record_json FROM evidence_records ORDER BY occurred_at").fetchall()
         return [json.loads(row[0]) for row in rows]
+
+    def unified_evidence(self, task_id: str | None = None) -> dict[str, Any]:
+        from .evidence import from_store_record, unify
+        return unify([from_store_record(record) for record in self.list_evidence(task_id)])
 
     def save_replay(self, record: dict[str, Any], now: str) -> None:
         with self._lock, self._connection() as conn:

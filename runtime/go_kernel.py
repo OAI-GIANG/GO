@@ -205,6 +205,10 @@ class Kernel:
             return GateResult.CONFLICT
         return GateResult.ALLOW if verified else GateResult.UNKNOWN
 
+    def unify_evidence(self, evidence_items: list[Evidence]) -> dict:
+        from runtime.go_runtime.core.evidence import from_kernel_evidence, unify
+        return unify([from_kernel_evidence(item) for item in evidence_items])
+
     def evaluate_unknown(self) -> GateResult:
         return GateResult.UNKNOWN
 
