@@ -151,9 +151,9 @@ class GOApplication:
 
     TOOL_OPS = {"github.read_repo", "github.read_branch", "github.read_file", "github.read_releases"}
 
-    def execute_tool(self, task_id: str, operation: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def execute_tool(self, task_id: str, operation: str, payload: dict[str, Any], approval: str = "not_required") -> dict[str, Any]:
         governance = ToolGovernance(self.tools)
-        result = governance.execute(task_id, operation, dict(payload), "not_required")
+        result = governance.execute(task_id, operation, dict(payload), approval)
         report = {"operation": operation, "tool": result.tool_name, "ok": result.ok, "call_id": result.call_id,
                   "output": result.output, "witness": result.witness, "tool_contract": "TOOL-GOVERNANCE-V1"}
         self.store.add_event(task_id, "TOOL_EXECUTED",
@@ -161,6 +161,31 @@ class GOApplication:
                               "status": result.witness.get("status"), "witness_digest": result.witness.get("witness_digest")},
                              utc_now())
         return report
+
+    def run_objective(self, task_id: str, payload: dict[str, Any], approval: str = "not_required") -> dict[str, Any]:
+        """OBJECTIVE -> discovery -> bounded selection -> governed execution -> failure policy."""
+        from .engine import objective_router as orx
+        objective = str(payload.get("objective") or payload.get("text") or "").strip()
+        if not objective:
+            raise ValueError("objective is required")
+        catalogue = orx.discover(self.tools)
+        attempt: dict[str, int] = {}
+
+        def execute(operation: str, step_payload: dict[str, Any], step_approval: str) -> tuple[bool, dict[str, Any], dict[str, Any]]:
+            appr = step_approval if step_approval and step_approval != "not_required" else approval
+            attempt[operation] = attempt.get(operation, 0) + 1
+            step_task = f"{task_id}:{operation}:{attempt[operation]}"
+            if operation in {"echo", "ask"}:
+                out = self.execute(step_task, operation, step_payload)
+                return True, out, {"status": "COMPLETED", "tool_name": operation, "task_id": step_task}
+            report = self.execute_tool(step_task, operation, step_payload, approval=appr)
+            return bool(report.get("ok")), dict(report.get("output") or {}), dict(report.get("witness") or {})
+
+        trace = orx.orchestrate(objective, catalogue=catalogue, execute=execute)
+        self.store.add_event(task_id, "OBJECTIVE_ROUTED",
+                             {"objective": objective, "status": trace.get("status"), "final": trace.get("final"),
+                              "selection": trace.get("selection"), "replans": trace.get("replans")}, utc_now())
+        return trace
 
     def submit(self, body:dict[str,Any])->dict[str,Any]:
         task_id=str(body.get("task_id") or f"TASK-{uuid.uuid4().hex}")
@@ -179,10 +204,16 @@ class GOApplication:
         metadata=claimed.get("metadata") or {}
         operation=str(metadata.get("operation") or operation); payload=dict(metadata.get("payload") or payload)
         try:
-            tool_names={n for n in self.tools._tools if n.startswith(("github.","hg."))}
-            allowed={"echo","ask"}|tool_names
-            if operation not in allowed: raise ValueError("unsupported operation; allowed operations: echo, ask, "+", ".join(sorted(tool_names)))
-            result=self.execute_tool(task_id,operation,payload) if operation in tool_names else self.execute(task_id,operation,payload)
+            tool_names=set(self.tools._tools)
+            approval=str(body.get("approval") or "not_required")
+            if operation=="objective.run":
+                result=self.run_objective(task_id,payload,approval=approval)
+            elif operation in tool_names:
+                result=self.execute_tool(task_id,operation,payload,approval=approval)
+            elif operation in {"echo","ask"}:
+                result=self.execute(task_id,operation,payload)
+            else:
+                raise ValueError("unsupported operation; allowed operations: echo, ask, objective.run, "+", ".join(sorted(tool_names)))
             final=self.durable.finalize(task_id,int(claimed["fence_token"]),"COMPLETED",report=result)
             self.store.add_event(task_id,"EXECUTION_COMPLETED",result,utc_now())
             return final
