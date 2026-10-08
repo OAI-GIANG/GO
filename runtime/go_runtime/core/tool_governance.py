@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .tool_runtime import ToolContext, ToolRegistry, ToolResult, _digest
-from go_kernel import Authority, Execution, GateResult, Kernel, now_utc
+from runtime.go_kernel import Authority, Execution, GateResult, Kernel, now_utc
 
 STATES=("ACCEPTED","VALIDATED","AUTHORIZATION_PENDING","APPROVED","STARTED","COMPLETED","FAILED","DENIED","CANCELLED")
 TERMINAL={"COMPLETED","FAILED","DENIED","CANCELLED"}
