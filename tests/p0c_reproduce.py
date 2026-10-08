@@ -74,7 +74,7 @@ assert promoted is not None and promoted.verification_status == "VERIFIED"
 
 # 5. Forge an object after creation; immutable anchor/registry binding must still deny.
 forged = object.__new__(ivv.VerificationResult)
-for field in ("verification_status", "truth_status", "verifier_id", "method", "reason", "digest", "anchor_id"):
+for field in ("verification_status", "truth_status", "verifier_id", "method", "reason", "digest", "evidence_digest", "anchor_id", "freshness_status", "corroboration_status", "assurance_status"):
     object.__setattr__(forged, field, getattr(result, field))
 object.__setattr__(forged, "verifier_id", "attacker")
 print("TAMPERED_PROMOTION=", ivv.promotion_gate(forged))
