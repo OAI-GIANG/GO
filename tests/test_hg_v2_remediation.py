@@ -91,6 +91,9 @@ class _Verifier:
             method="external-check",
             reason="OK",
             evidence_digest=evidence_digest,
+            freshness_status="CURRENT",
+            corroboration_status="CORROBORATED",
+            assurance_status="ASSESSED",
         )
 
 

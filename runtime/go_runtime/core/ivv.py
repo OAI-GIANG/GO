@@ -66,7 +66,11 @@ class VerificationResult:
     method: str
     reason: str
     digest: str
+    evidence_digest: str
     anchor_id: str
+    freshness_status: str
+    corroboration_status: str
+    assurance_status: str
 
     def __init__(
         self,
@@ -77,7 +81,11 @@ class VerificationResult:
         reason: str,
         digest: str,
         *,
+        evidence_digest: str = "",
         anchor_id: str = "",
+        freshness_status: str = "UNASSESSED",
+        corroboration_status: str = "UNASSESSED",
+        assurance_status: str = "UNASSESSED",
         _seal: object | None = None,
     ) -> None:
         if _seal is not _RESULT_SEAL:
@@ -88,7 +96,11 @@ class VerificationResult:
         object.__setattr__(self, "method", method)
         object.__setattr__(self, "reason", reason)
         object.__setattr__(self, "digest", digest)
+        object.__setattr__(self, "evidence_digest", evidence_digest)
         object.__setattr__(self, "anchor_id", anchor_id)
+        object.__setattr__(self, "freshness_status", freshness_status)
+        object.__setattr__(self, "corroboration_status", corroboration_status)
+        object.__setattr__(self, "assurance_status", assurance_status)
 
 
 @dataclass(frozen=True)
@@ -116,6 +128,9 @@ def _result_digest(
     method: str,
     reason: str,
     evidence_digest: str,
+    freshness_status: str,
+    corroboration_status: str,
+    assurance_status: str,
 ) -> str:
     return _digest(
         {
@@ -126,6 +141,9 @@ def _result_digest(
             "method": method,
             "reason": reason,
             "evidence_digest": evidence_digest,
+            "freshness_status": freshness_status,
+            "corroboration_status": corroboration_status,
+            "assurance_status": assurance_status,
         }
     )
 
@@ -138,6 +156,9 @@ def _issue_result(
     method: str,
     reason: str,
     evidence_digest: str,
+    freshness_status: str = "UNASSESSED",
+    corroboration_status: str = "UNASSESSED",
+    assurance_status: str = "UNASSESSED",
 ) -> VerificationResult:
     return VerificationResult(
         verification_status,
@@ -152,8 +173,15 @@ def _issue_result(
             method=method,
             reason=reason,
             evidence_digest=evidence_digest,
+            freshness_status=freshness_status,
+            corroboration_status=corroboration_status,
+            assurance_status=assurance_status,
         ),
+        evidence_digest=evidence_digest,
         anchor_id=TRUST_ANCHOR_ID,
+        freshness_status=freshness_status,
+        corroboration_status=corroboration_status,
+        assurance_status=assurance_status,
         _seal=_RESULT_SEAL,
     )
 
@@ -267,10 +295,14 @@ def verify_evidence(
         method=result.method,
         reason=result.reason,
         evidence_digest=evidence_digest,
+        freshness_status=result.freshness_status,
+        corroboration_status=result.corroboration_status,
+        assurance_status=result.assurance_status,
     )
     if (
         result.anchor_id != TRUST_ANCHOR_ID
         or result.verifier_id != spec.verifier_id
+        or result.evidence_digest != evidence_digest
         or result.digest != expected
     ):
         return _issue_result(
@@ -304,10 +336,35 @@ def promotion_gate(result: VerificationResult) -> dict[str, Any]:
             "verification_status": result.verification_status,
         }
 
+    expected_digest = _result_digest(
+        verification_status=result.verification_status,
+        truth_status=result.truth_status,
+        verifier_id=result.verifier_id,
+        method=result.method,
+        reason=result.reason,
+        evidence_digest=result.evidence_digest,
+        freshness_status=result.freshness_status,
+        corroboration_status=result.corroboration_status,
+        assurance_status=result.assurance_status,
+    )
+    if result.digest != expected_digest:
+        return {
+            "promotable": False,
+            "truth_status": epistemics.TruthStatus.UNVERIFIED.value,
+            "verification_status": result.verification_status,
+            "reason": "VERIFICATION_RESULT_DIGEST_INVALID",
+        }
+
     admitted = result.verification_status == epistemics.VerificationStatus.INDEPENDENTLY_VERIFIED.value
     truth = result.truth_status == epistemics.TruthStatus.VERIFIED.value
+    fresh = result.freshness_status == "CURRENT"
+    corroborated = result.corroboration_status == "CORROBORATED"
+    assured = result.assurance_status == "ASSESSED"
     return {
-        "promotable": admitted and truth,
-        "truth_status": epistemics.TruthStatus.VERIFIED.value if admitted and truth else epistemics.TruthStatus.UNVERIFIED.value,
+        "promotable": admitted and truth and fresh and corroborated and assured,
+        "truth_status": epistemics.TruthStatus.VERIFIED.value if admitted and truth and fresh and corroborated and assured else epistemics.TruthStatus.UNVERIFIED.value,
         "verification_status": result.verification_status,
+        "freshness_status": result.freshness_status,
+        "corroboration_status": result.corroboration_status,
+        "assurance_status": result.assurance_status,
     }

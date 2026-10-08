@@ -48,6 +48,9 @@ class TrustedVerifier:
             method="trusted-test-verifier",
             reason="trusted-positive",
             evidence_digest=evidence_digest,
+            freshness_status="CURRENT",
+            corroboration_status="CORROBORATED",
+            assurance_status="ASSESSED",
         )
 
 

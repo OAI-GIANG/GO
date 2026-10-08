@@ -48,6 +48,9 @@ class TrustedVerifierFixture:
             method="trusted-fixture",
             reason="trusted-positive",
             evidence_digest=evidence_digest,
+            freshness_status="CURRENT",
+            corroboration_status="CORROBORATED",
+            assurance_status="ASSESSED",
         )
 
 
@@ -251,7 +254,7 @@ def test_result_tampering_is_denied_at_promotion_gate(trusted_handle):
         verifier=trusted_handle,
     )
     forged = object.__new__(ivv.VerificationResult)
-    for field in ("verification_status", "truth_status", "verifier_id", "method", "reason", "digest", "anchor_id"):
+    for field in ("verification_status", "truth_status", "verifier_id", "method", "reason", "digest", "evidence_digest", "anchor_id", "freshness_status", "corroboration_status", "assurance_status"):
         object.__setattr__(forged, field, getattr(result, field))
     object.__setattr__(forged, "verifier_id", "attacker")
     assert ivv.promotion_gate(forged)["promotable"] is False
