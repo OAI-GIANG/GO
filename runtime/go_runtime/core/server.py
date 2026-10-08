@@ -15,6 +15,8 @@ from .engine.task_contract import TaskContract, TaskContractError
 from .engine.durable_execution import DurableExecution, DurableExecutionError
 from .vps2_execution_bridge import VPS2ExecutionBridge, BridgeRequest, OperationTemplate
 from .cognitive import CognitiveService
+from .tool_runtime import default_tool_registry
+from .tool_governance import ToolGovernance, ToolGovernanceError
 from runtime.go_kernel import GateResult
 
 VERSION = "0.1.1"
@@ -43,6 +45,7 @@ class GOApplication:
         self.store=RuntimeStore(config.data_path)
         self.durable=DurableExecution(self.store)
         self.cognitive=CognitiveService(self.store,config.commit,config.tree,config.environment)
+        self.tools=default_tool_registry()
         self.durable.recover_orphans()
         self.store.set_meta("version",VERSION); self.store.set_meta("commit",config.commit); self.store.set_meta("tree",config.tree); self.store.set_meta("started_at",utc_now())
 
@@ -91,9 +94,10 @@ class GOApplication:
         import urllib.error
         def executor(template, variables):
             base = os.getenv("HG_EDGE_URL", "").strip().rstrip("/")
-            token = os.getenv("HG_EDGE_TOKEN", "").strip()
-            if not base or not token:
-                raise RuntimeError("VPS2_EDGE_CREDENTIALS_NOT_CONFIGURED")
+            from .tool_runtime import CredentialBroker
+            token = CredentialBroker().get("HG_EDGE_TOKEN")
+            if not base:
+                raise RuntimeError("VPS2_EDGE_URL_NOT_CONFIGURED")
             url = base + template.action
             request = urllib.request.Request(
                 url,
@@ -111,8 +115,13 @@ class GOApplication:
         result["vps2_target_id"] = target
         return result
 
+    def _operations(self)->list[str]:
+        tools=getattr(self,"tools",None)
+        names=set(getattr(tools,"_tools",{}) or {})
+        return sorted({"echo","ask"}|names)
+
     def status(self)->dict[str,Any]:
-        return {"name":"GO","version":VERSION,"status":"RUNNING","host":socket.gethostname(),"commit":self.config.commit,"tree":self.config.tree,"environment":self.config.environment,"data_path":str(self.config.data_path),"started_at":self.store.get_meta("started_at"),"operations":["echo","ask"],"integration":"GO_NATIVE_ENGINE"}
+        return {"name":"GO","version":VERSION,"status":"RUNNING","host":socket.gethostname(),"commit":self.config.commit,"tree":self.config.tree,"environment":self.config.environment,"data_path":str(self.config.data_path),"started_at":self.store.get_meta("started_at"),"operations":self._operations(),"integration":"GO_NATIVE_ENGINE"}
 
     def execute(self, task_id:str, operation:str, payload:dict[str,Any])->dict[str,Any]:
         request=__import__("runtime.go_runtime.core.contracts",fromlist=["CognitiveRequest"]).CognitiveRequest(task_id,operation,payload,self.config.commit,self.config.tree,self.config.environment)
@@ -140,6 +149,19 @@ class GOApplication:
         result["learning_artifact_id"]=learning_artifact["artifact_id"]
         return result
 
+    TOOL_OPS = {"github.read_repo", "github.read_branch", "github.read_file", "github.read_releases"}
+
+    def execute_tool(self, task_id: str, operation: str, payload: dict[str, Any]) -> dict[str, Any]:
+        governance = ToolGovernance(self.tools)
+        result = governance.execute(task_id, operation, dict(payload), "not_required")
+        report = {"operation": operation, "tool": result.tool_name, "ok": result.ok, "call_id": result.call_id,
+                  "output": result.output, "witness": result.witness, "tool_contract": "TOOL-GOVERNANCE-V1"}
+        self.store.add_event(task_id, "TOOL_EXECUTED",
+                             {"call_id": result.call_id, "tool": result.tool_name,
+                              "status": result.witness.get("status"), "witness_digest": result.witness.get("witness_digest")},
+                             utc_now())
+        return report
+
     def submit(self, body:dict[str,Any])->dict[str,Any]:
         task_id=str(body.get("task_id") or f"TASK-{uuid.uuid4().hex}")
         operation=str(body.get("operation") or "").strip().lower(); payload=body.get("payload")
@@ -157,8 +179,10 @@ class GOApplication:
         metadata=claimed.get("metadata") or {}
         operation=str(metadata.get("operation") or operation); payload=dict(metadata.get("payload") or payload)
         try:
-            if operation not in {"echo","ask"}: raise ValueError("unsupported operation; allowed operations: echo, ask")
-            result=self.execute(task_id,operation,payload)
+            tool_names={n for n in self.tools._tools if n.startswith("github.")}
+            allowed={"echo","ask"}|tool_names
+            if operation not in allowed: raise ValueError("unsupported operation; allowed operations: echo, ask, "+", ".join(sorted(tool_names)))
+            result=self.execute_tool(task_id,operation,payload) if operation in tool_names else self.execute(task_id,operation,payload)
             final=self.durable.finalize(task_id,int(claimed["fence_token"]),"COMPLETED",report=result)
             self.store.add_event(task_id,"EXECUTION_COMPLETED",result,utc_now())
             return final
