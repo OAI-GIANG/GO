@@ -112,7 +112,7 @@ class GOApplication:
                 raw = exc.read().decode("utf-8", errors="replace")
                 raise RuntimeError(f"VPS2_HTTP_{exc.code}:{raw[:500]}") from exc
         result = bridge.execute(req, executor)
-        result["vps2_target_id"] = target
+        result["vps2_target_id"] = req.target_id or os.getenv("HG_VPS2_TARGET_ID", "")
         return result
 
     def _operations(self)->list[str]:
@@ -131,19 +131,20 @@ class GOApplication:
         if context: model_payload["go_context"]=context
         output=self.cognitive.invoke_model(task_id,operation,model_payload)
         evidence=self.cognitive.emit_evidence(task_id,"MODEL_EXECUTION","model execution completed")
-        candidate = __import__("runtime.go_kernel", fromlist=["Evidence"]).Evidence(
-            evidence["evidence_id"], task_id, "runtime", evidence["source"],
-            datetime.fromisoformat(evidence["captured_at"]), evidence["provenance"],
-            evidence["integrity"], evidence["verification_status"], evidence["claim"]
+        from . import ivv, epistemics
+        verification = ivv.verify_evidence(
+            claim=str(evidence.get("claim") or ""), evidence=evidence, producer_id="go_runtime.runtime",
+            producer_authority_domain="runtime", producer_failure_domain="runtime",
+            verifier=getattr(self, "_ivv_verifier", None),
         )
-        verification, promoted = self.cognitive.kernel.verify_and_promote_evidence(candidate, task_id, "runtime")
-        if verification is not GateResult.ALLOW or promoted is None:
-            raise RuntimeError("execution evidence did not satisfy verification gate")
-        evidence["verification_status"] = promoted.verification_status
+        ivv.promotion_gate(verification)  # admission: no self-promotion without independent verification
+        evidence["verification_status"] = verification.verification_status
+        evidence["truth_status"] = verification.truth_status
         self.store.save_evidence(evidence, evidence["captured_at"])
         replay=self.cognitive.emit_replay(task_id,"MODEL_EXECUTION",{"operation":operation,"output":output,"evidence_id":evidence["evidence_id"]})
         memory=self.cognitive.observe_memory(task_id,payload,evidence["evidence_id"])
-        result={**output,"task_id":task_id,"cognitive":{"advice":advice.recommendation,"memory_ids":list(advice.memory_ids),"evidence_ids":list(advice.evidence_ids),"context_used":bool(context),"go_context":context},"evidence_id":evidence["evidence_id"],"replay_id":replay["replay_id"]}
+        result={**output,"task_id":task_id,"cognitive":{"advice":advice.recommendation,"memory_ids":list(advice.memory_ids),"evidence_ids":list(advice.evidence_ids),"context_used":bool(context),"go_context":context},"evidence_id":evidence["evidence_id"],"replay_id":replay["replay_id"],
+                "epistemics":epistemics.envelope(execution_state="COMPLETED", truth_status=verification.truth_status, verification_status=verification.verification_status)}
         if memory: result.update({"memory_id":memory["memory_id"],"memory_key":memory["normalized_key"],"memory_scope":memory["scope"]})
         learning_artifact=self.cognitive.build_learning_artifact(task_id,result)
         result["learning_artifact_id"]=learning_artifact["artifact_id"]

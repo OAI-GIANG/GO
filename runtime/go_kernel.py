@@ -179,14 +179,13 @@ class Kernel:
             return GateResult.BLOCKED
         return GateResult.ALLOW
 
-    def verify_and_promote_evidence(self, evidence: Evidence, subject: str, scope: str) -> tuple[GateResult, Optional[Evidence]]:
-        """Verify canonical evidence and return a new VERIFIED record only on success."""
-        if self.verify_evidence(
-            Evidence(evidence.evidence_id, evidence.subject, evidence.scope, evidence.source,
-                     evidence.captured_at, evidence.provenance, evidence.integrity, "VERIFIED", evidence.claim),
-            subject,
-            scope,
-        ) is not GateResult.ALLOW:
+    def verify_and_promote_evidence(self, evidence: Evidence, subject: str, scope: str, *, independent_verification: str | None = None) -> tuple[GateResult, Optional[Evidence]]:
+        """V2: promotion to VERIFIED requires INDEPENDENT verification.
+
+        A producer may NOT self-promote its own evidence (removed circular path).
+        Without an independent verification result, nothing is promoted.
+        """
+        if independent_verification != "INDEPENDENTLY_VERIFIED":
             return GateResult.BLOCKED, None
         promoted = Evidence(
             evidence.evidence_id, evidence.subject, evidence.scope, evidence.source,

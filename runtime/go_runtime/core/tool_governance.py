@@ -76,13 +76,18 @@ class ToolGovernance:
         if new not in TRANSITIONS.get(current,set()): raise ToolGovernanceError("INVALID_TOOL_STATE_TRANSITION",f"{current}->{new}")
         return self._emit(call_id,task_id,tool_name,new,previous_state=current,**extra)
     def _authority(self,task_id,tool_name):
+        # V2: ToolGovernance is an authority CONSUMER. The single canonical root issues.
+        from .authority import AuthorityRoot, AUTHORITY_ROOT_ID
         provenance=os.getenv("HG_TOOL_AUTHORITY_PROVENANCE","").strip()
         expected=os.getenv("HG_TOOL_AUTHORITY_PROVENANCE_EXPECTED","").strip()
         subject=os.getenv("HG_TOOL_AUTHORITY_SUBJECT","").strip()
         if not task_id or not provenance or not expected or provenance != expected: return None
         if not subject.startswith("HG_SESSION_"): return None
+        root=AuthorityRoot.instance(); audience=f"tool:{tool_name}"
+        token=root.issue(subject=subject, scope=[audience], action="execute", audience=audience, ttl_s=300)
+        if not root.verify(token, action="execute", scope=[audience], audience=audience): return None
         now=now_utc()
-        return Authority("AUTH-TOOL-"+hashlib.sha256((subject+tool_name).encode()).hexdigest()[:16],subject,frozenset({f"tool:{tool_name}"}),frozenset({"execute"}),"HG_KERNEL",now,now+timedelta(minutes=5),frozenset({task_id}),"ACTIVE",provenance)
+        return Authority(token.token_id,subject,frozenset({audience}),frozenset({"execute"}),AUTHORITY_ROOT_ID,now,now+timedelta(minutes=5),frozenset({task_id}),"ACTIVE",provenance)
     def execute(self,task_id:str,name:str,arguments:dict[str,Any],approval="not_required",call_id=None)->ToolResult:
         adapter=self.registry._tools.get(name)
         if adapter is None: raise ToolGovernanceError("TOOL_NOT_FOUND")

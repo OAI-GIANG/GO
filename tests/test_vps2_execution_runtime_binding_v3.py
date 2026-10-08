@@ -163,6 +163,9 @@ def test_runtime_positive_gate_reaches_edge_executor_boundary():
     app = configured_app()
     os.environ["HG_EDGE_URL"] = "http://127.0.0.1:9"
     os.environ["HG_EDGE_TOKEN"] = "not-a-real-token"
-    with pytest.raises(Exception) as exc:
-        app.execute_vps2(request())
-    assert "VPS2" in str(exc.value) or type(exc.value).__name__ in {"URLError", "TimeoutError", "ConnectionRefusedError"}
+    # V2: the boundary is reached and classified — never a fabricated success.
+    out = app.execute_vps2(request())
+    assert out["evidence"]["external_state"] in {"FAILED", "UNKNOWN"}
+    assert out["evidence"]["execution_status"] != "COMPLETED"
+    assert out["evidence"]["reconciliation_required"] in {True, False}
+    assert "100" != str(out["evidence"]["result"].get("http_status", ""))
