@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from runtime.go_runtime.core.authority import AuthorityRoot, AuthorityError
+from runtime.go_runtime.core.authority import AuthorityRoot, AuthorityError, require_authority
 from runtime.go_runtime.core.cognitive import CognitiveService
 from runtime.go_runtime.core.store import RuntimeStore
 
@@ -86,3 +86,23 @@ def test_execution_path_positive_with_external_root(tmp_path):
     auth_id = cog.authorize("TASK-P0A-POS", "echo")   # caller -> callee -> external root -> ALLOW
     assert auth_id
     store.close() if hasattr(store, "close") else None
+
+
+# ---------------- explicit negative acceptance cases ----------------
+def test_runtime_owned_token_rejects_wrong_action(monkeypatch):
+    root = _deny_provenance(monkeypatch)
+    token = root.issue(subject="alice", scope=["runtime"], action="execute", audience="kernel", ttl_s=60)
+
+    assert not root.verify(token, action="admin", scope=["runtime"], audience="kernel")
+    with pytest.raises(AuthorityError) as exc:
+        require_authority(token, subject="alice", action="admin", scope=["runtime"], audience="kernel")
+    assert exc.value.code == "AUTHORITY_DENIED"
+
+
+def test_runtime_owned_token_rejects_wrong_expected_subject(monkeypatch):
+    root = _deny_provenance(monkeypatch)
+    token = root.issue(subject="alice", scope=["runtime"], action="execute", audience="kernel", ttl_s=60)
+
+    with pytest.raises(AuthorityError) as exc:
+        require_authority(token, subject="mallory", action="execute", scope=["runtime"], audience="kernel")
+    assert exc.value.code == "AUTHORITY_REQUIRED"
