@@ -1,27 +1,32 @@
-﻿# MASTER GOVERNANCE RULESET V1 — GitHub Cutover Execution Report
+﻿# MASTER GOVERNANCE RULESET V1 — GitHub Replacement Execution Report
+
 Date: 2026-10-10
 Repository: OAI-GIANG/GO
-Working tree: E:\OAI\HG\core
 Branch: feature/master-governance-ruleset-v1-cutover-20261010
-HEAD before commit: 03409311f184f2c3f110274a10cf1ac0afbc1b1a
-origin/hg-core observed HEAD before commit: a4d453519ea8994650cb520606eb013ddca8896e
-Canonical V1 source SHA-256: cc1a8b171b1c0e194923359b5b8b17ee9e9ff646b33693cc983f2a9984cc21af
-Generated V1 source SHA-256: cc1a8b171b1c0e194923359b5b8b17ee9e9ff646b33693cc983f2a9984cc21af
+Commit: 7f46b1a299ced7b568160806dbb3909dbc763ee2
 
-## Verified locally
-- V1 canonical source hash matched the pinned approved artifact.
-- Generated source is byte-identical by SHA-256.
-- Local test results: tests/test_v1_runtime.py: 8 PASS; tests/test_v1_system_binding.py + test_v1_all_services_binding.py + test_v1_phone_payload.py + test_hg_coherence.py: 17 PASS.
-- Generated runtime --self-test returned PASS; status returned VERIFIED; bootstrap regenerated runtime with self-test exit 0.
-- Legacy PARADISE/LOVE policy/runtime deletions and V1 additions have been staged on the dedicated branch.
-- No secret-bearing or transient paths were intentionally staged.
+## Remote-verified facts
+- The dedicated branch was pushed successfully and its origin ref resolves to commit `7f46b1a299ced7b568160806dbb3909dbc763ee2`.
+- `control/MASTER_GOVERNANCE_RULESET_V1.md` is present on the pushed branch. Direct `git show` byte hash: `cc1a8b171b1c0e194923359b5b8b17ee9e9ff646b33693cc983f2a9984cc21af`, matching the canonical source.
+- Active paths matching scoped legacy governance/runtime items were absent from the pushed branch: `control/PARADISE*`, `control/LOVE_OAI_GIANG_DISTILLATION_BOUNDARY_V1.md`, `runtime/paradise*`, `projects/LOVE/stt_love/*`, and `tests/test_hg_evolution.py`.
+- The pushed branch includes canonical V1, approval binding, updated authority/architecture, generated V1 runtime and selected tests/evidence.
+- Local relevant tests passed: 8 V1 runtime tests and 17 combined service/system/phone/coherence tests. Generated runtime self-test and bootstrap returned PASS/GENERATED, exact source hash verified.
+- No secrets or known transient/credential files were staged.
 
-## Limitations
-- The repository working tree contains many unrelated modified/untracked files; these remain unstaged.
-- Markdown source contains trailing spaces used for hard line breaks; git diff --cached --check reports those known source-format spaces. Source bytes must remain hash-pinned, so they were not normalized.
-- Full historical runtime regression was not run.
-- No force-push, remote branch deletion, or historical Git purge is part of this scoped replacement.
-- Main/production/VPS/mobile runtimes have not been updated by this commit.
+## Scope not yet applied globally
+- The branch `hg-core` and other existing remote branches were not modified. The new branch is a candidate for review, not a rewrite of all GitHub branches.
+- No PR was merged, no main/default branch change was made, no branch/history deletion or force-push was performed, and no production/VPS/phone deployment was performed.
+- Git commit history and deleted historical objects still contain legacy policy references by design. This is not a history purge.
+- The local worktree still has unrelated changes/untracked files outside this commit; they remain unstaged.
+- `git diff --cached --check` reports source Markdown hard-line-break spaces in the canonical file. They are preserved because editing or normalizing the source would break the required canonical hash. This is disclosed, not silently rewritten.
 
-## Remote application
-A dedicated cutover branch is to be pushed for review; no push to main or force-push is permitted. Global application remains NOT_VERIFIED until the accepted branch is integrated and relevant targets are checked.
+## State
+LOCAL_CUTOVER: VERIFIED
+DEDICATED_BRANCH_PUSH: VERIFIED
+REMOTE_BRANCH_SOURCE_HASH: VERIFIED
+REMOTE_BRANCH_SCOPED_ACTIVE_LEGACY_PATHS: NONE_FOUND
+DEFAULT_BRANCH_REPLACEMENT: NOT_APPLIED
+OTHER_BRANCHES_REPLACEMENT: NOT_APPLIED
+HISTORICAL_GIT_PURGE: NOT_APPLIED
+PRODUCTION_REMOTE_RUNTIME: NOT_APPLIED
+GLOBAL_REPLACEMENT: NOT_COMPLETE
