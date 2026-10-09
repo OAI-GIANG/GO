@@ -17,6 +17,7 @@ from .vps2_execution_bridge import VPS2ExecutionBridge, BridgeRequest, Operation
 from .cognitive import CognitiveService
 from .tool_runtime import default_tool_registry
 from .tool_governance import ToolGovernance, ToolGovernanceError
+from runtime import go_kernel
 from runtime.go_kernel import GateResult
 
 VERSION = "0.1.1"
@@ -45,6 +46,7 @@ class GOApplication:
         self.store=RuntimeStore(config.data_path)
         self.durable=DurableExecution(self.store)
         self.cognitive=CognitiveService(self.store,config.commit,config.tree,config.environment)
+        self.kernel=go_kernel.Kernel()
         self.tools=default_tool_registry()
         self.durable.recover_orphans()
         self.store.set_meta("version",VERSION); self.store.set_meta("commit",config.commit); self.store.set_meta("tree",config.tree); self.store.set_meta("started_at",utc_now())
@@ -112,7 +114,7 @@ class GOApplication:
                 raw = exc.read().decode("utf-8", errors="replace")
                 raise RuntimeError(f"VPS2_HTTP_{exc.code}:{raw[:500]}") from exc
         result = bridge.execute(req, executor)
-        result["vps2_target_id"] = target
+        result["vps2_target_id"] = req.target_id or os.getenv("HG_VPS2_TARGET_ID", "")
         return result
 
     def _operations(self)->list[str]:
@@ -131,19 +133,32 @@ class GOApplication:
         if context: model_payload["go_context"]=context
         output=self.cognitive.invoke_model(task_id,operation,model_payload)
         evidence=self.cognitive.emit_evidence(task_id,"MODEL_EXECUTION","model execution completed")
-        candidate = __import__("runtime.go_kernel", fromlist=["Evidence"]).Evidence(
-            evidence["evidence_id"], task_id, "runtime", evidence["source"],
-            datetime.fromisoformat(evidence["captured_at"]), evidence["provenance"],
-            evidence["integrity"], evidence["verification_status"], evidence["claim"]
+        from . import ivv, epistemics
+        verification = ivv.verify_evidence(
+            claim=str(evidence.get("claim") or ""), evidence=evidence, producer_id="go_runtime.runtime",
+            producer_authority_domain="runtime", producer_failure_domain="runtime",
+            verifier=ivv.get_trusted_verifier(),
         )
-        verification, promoted = self.cognitive.kernel.verify_and_promote_evidence(candidate, task_id, "runtime")
-        if verification is not GateResult.ALLOW or promoted is None:
-            raise RuntimeError("execution evidence did not satisfy verification gate")
-        evidence["verification_status"] = promoted.verification_status
-        self.store.save_evidence(evidence, evidence["captured_at"])
+        evidence_obj = go_kernel.Evidence(
+            str(evidence["evidence_id"]), "go_runtime.runtime", "MODEL_EXECUTION", str(evidence["source"]),
+            evidence["captured_at"], str(evidence.get("provenance") or ""), str(evidence["integrity"]),
+            "UNVERIFIED", str(evidence.get("claim") or ""),
+        )
+        promotion_status, promoted = self.kernel.verify_and_promote_evidence(
+            evidence_obj, task_id, "MODEL_EXECUTION", verification_result=verification
+        )
+        if promotion_status is go_kernel.GateResult.ALLOW and promoted is not None:
+            evidence["verification_status"] = promoted.verification_status
+            evidence["truth_status"] = verification.truth_status
+            self.store.save_evidence(evidence, evidence["captured_at"])
+        else:
+            evidence["verification_status"] = "UNVERIFIED"
+            evidence["truth_status"] = "UNVERIFIED"
+            self.store.save_evidence(evidence, evidence["captured_at"])
         replay=self.cognitive.emit_replay(task_id,"MODEL_EXECUTION",{"operation":operation,"output":output,"evidence_id":evidence["evidence_id"]})
         memory=self.cognitive.observe_memory(task_id,payload,evidence["evidence_id"])
-        result={**output,"task_id":task_id,"cognitive":{"advice":advice.recommendation,"memory_ids":list(advice.memory_ids),"evidence_ids":list(advice.evidence_ids),"context_used":bool(context),"go_context":context},"evidence_id":evidence["evidence_id"],"replay_id":replay["replay_id"]}
+        result={**output,"task_id":task_id,"cognitive":{"advice":advice.recommendation,"memory_ids":list(advice.memory_ids),"evidence_ids":list(advice.evidence_ids),"context_used":bool(context),"go_context":context},"evidence_id":evidence["evidence_id"],"replay_id":replay["replay_id"],
+                "epistemics":epistemics.envelope(execution_state="COMPLETED", truth_status=verification.truth_status, verification_status=verification.verification_status)}
         if memory: result.update({"memory_id":memory["memory_id"],"memory_key":memory["normalized_key"],"memory_scope":memory["scope"]})
         learning_artifact=self.cognitive.build_learning_artifact(task_id,result)
         result["learning_artifact_id"]=learning_artifact["artifact_id"]

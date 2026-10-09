@@ -82,7 +82,8 @@ def test_orchestrate_bounded_replan_on_target_unavailable():
             return False, {"message": "github_http_404"}, {"status": "FAILED"}
         return True, {"status": 200, "op": op}, {"status": "COMPLETED"}
     trace = orx.orchestrate("Read the file README.md from branch hg-missing and report it.", catalogue=CAT, execute=execute)
-    assert trace["final"] == "SUCCESS"
+    assert trace["final"] == "ROUTED"  # routing/completion != task success
+    assert trace["epistemics"]["task_outcome"] == "UNKNOWN"
     assert trace["replans"] and trace["replans"][0]["type"] == "replan"
     assert calls[0][1].get("ref") == "hg-missing" and calls[1][1].get("ref") == orx.DEFAULT_REF
 
@@ -95,7 +96,7 @@ def test_orchestrate_bounded_retry_on_transient():
             return False, {"message": "github_http_500"}, {"status": "FAILED"}
         return True, {"status": 200}, {"status": "COMPLETED"}
     trace = orx.orchestrate("Read the repository metadata for OAI-GIANG/GO.", catalogue=CAT, execute=execute)
-    assert trace["final"] == "SUCCESS" and len(calls) == 2 and trace["replans"][0]["type"] == "retry"
+    assert trace["final"] == "ROUTED" and len(calls) == 2 and trace["replans"][0]["type"] == "retry"
 
 
 def test_orchestrate_terminal_failure_is_bounded():

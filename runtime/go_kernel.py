@@ -179,15 +179,19 @@ class Kernel:
             return GateResult.BLOCKED
         return GateResult.ALLOW
 
-    def verify_and_promote_evidence(self, evidence: Evidence, subject: str, scope: str) -> tuple[GateResult, Optional[Evidence]]:
-        """Verify canonical evidence and return a new VERIFIED record only on success."""
-        if self.verify_evidence(
-            Evidence(evidence.evidence_id, evidence.subject, evidence.scope, evidence.source,
-                     evidence.captured_at, evidence.provenance, evidence.integrity, "VERIFIED", evidence.claim),
-            subject,
-            scope,
-        ) is not GateResult.ALLOW:
+    def verify_and_promote_evidence(self, evidence: Evidence, subject: str, scope: str, *, verification_result) -> tuple[GateResult, Optional[Evidence]]:
+        """Promote only from an immutable VerificationResult produced by the IV&V path."""
+        from runtime.go_runtime.core.ivv import VerificationResult, promotion_gate
+
+        if not isinstance(verification_result, VerificationResult):
             return GateResult.BLOCKED, None
+        if not isinstance(verification_result.verification_status, str):
+            return GateResult.BLOCKED, None
+        gate = promotion_gate(verification_result)
+        if not gate["promotable"]:
+            return GateResult.BLOCKED, None
+        if evidence.subject != subject or evidence.scope != scope:
+            return GateResult.DENY, None
         promoted = Evidence(
             evidence.evidence_id, evidence.subject, evidence.scope, evidence.source,
             evidence.captured_at, evidence.provenance, evidence.integrity, "VERIFIED", evidence.claim,
@@ -200,6 +204,10 @@ class Kernel:
         if len(claims) > 1:
             return GateResult.CONFLICT
         return GateResult.ALLOW if verified else GateResult.UNKNOWN
+
+    def unify_evidence(self, evidence_items: list[Evidence]) -> dict:
+        from runtime.go_runtime.core.evidence import from_kernel_evidence, unify
+        return unify([from_kernel_evidence(item) for item in evidence_items])
 
     def evaluate_unknown(self) -> GateResult:
         return GateResult.UNKNOWN

@@ -76,12 +76,18 @@ class CognitiveService:
         return CognitiveAdvice(request.task_id, recommendation, tuple(dict.fromkeys(memory_ids)), tuple(dict.fromkeys(evidence_ids)))
 
     def authorize(self, task_id: str, operation: str) -> str:
+        # V2: authority is issued by the SINGLE canonical root, not self-issued.
+        from .authority import AuthorityRoot, AUTHORITY_ROOT_ID
+        root = AuthorityRoot.instance()
+        token = root.issue(subject=task_id, scope=["runtime"], action="execute", audience="kernel", ttl_s=60)
+        if not root.verify(token, action="execute", scope=["runtime"], audience="kernel"):
+            raise PermissionError("canonical authority root denied issuance")
         now = datetime.now(timezone.utc)
         authority = Authority(
-            authority_id="go_runtime-runtime", subject=task_id,
-            scope=frozenset({"runtime"}), actions=frozenset({"execute"}), issuer="go_runtime",
+            authority_id=token.token_id, subject=task_id,
+            scope=frozenset({"runtime"}), actions=frozenset({"execute"}), issuer=AUTHORITY_ROOT_ID,
             valid_from=now - timedelta(seconds=1), valid_until=now + timedelta(seconds=60),
-            contexts=frozenset({"runtime"}), provenance=self.commit,
+            contexts=frozenset({"runtime"}), provenance=token.nonce,
         )
         result, authorization = self.kernel.authorize(authority, task_id, "execute", "runtime", "runtime", now)
         if result is not GateResult.ALLOW or authorization is None:
@@ -201,15 +207,17 @@ class CognitiveService:
                     "refutes": tuple(row.get("refutes", [])), "support_group_ids": tuple(row.get("support_group_ids", []))})
         raise KeyError(memory_id)
 
-    def promote_memory(self, task_id: str, memory_id: str, evidence_id: str, *, target: MemoryTrustStatus = MemoryTrustStatus.QUALIFIED) -> dict[str, Any]:
+    def promote_memory(self, task_id: str, memory_id: str, evidence_id: str, *, target: MemoryTrustStatus = MemoryTrustStatus.QUALIFIED, evaluator_id: str | None = None, evaluator_kind: str | None = None) -> dict[str, Any]:
         if target not in {MemoryTrustStatus.QUALIFIED, MemoryTrustStatus.VERIFIED}:
             raise ValueError("memory promotion target must be QUALIFIED or VERIFIED")
+        if not evaluator_id or evaluator_kind in (None, "runtime") or evaluator_id == "go_runtime-runtime":
+            raise PermissionError("memory self-certification forbidden: independent evaluator required")
         if not self.store.list_evidence(task_id) or evidence_id not in {e["evidence_id"] for e in self.store.list_evidence(task_id)}:
             raise ValueError("promotion requires canonical evidence for the task")
         record = self._load_memory_record(memory_id)
         certificate = TrustCertificate(
-            certificate_id=f"CERT-{uuid.uuid4().hex}", evaluator_id="go_runtime-runtime",
-            evaluator_kind="runtime", method="canonical-memory-promotion",
+            certificate_id=f"CERT-{uuid.uuid4().hex}", evaluator_id=evaluator_id,
+            evaluator_kind=evaluator_kind, method="external-memory-promotion",
             artifact_digest=memory_artifact_digest(record), source_commit=self.commit, source_tree_sha=self.tree,
             result=target.value, evidence_refs=(evidence_id,), issued_at=self._now(),
         )
@@ -245,19 +253,21 @@ class CognitiveService:
             raise KeyError(task_id)
         task=tasks[0]
         report=result or task.get("result") or {}
-        observed_state="COMPLETED" if result is not None else str(task.get("state"))
-        observation=f"task {task_id} completed with state {observed_state}"
+        observed_state=str(task.get("state"))
+        observation=f"task {task_id} execution state {observed_state} (lifecycle does not establish success or truth)"
         lesson=str((report.get("routing") or {}).get("basis") or "observed task execution")
         generalization="Observed execution outcomes may inform later bounded learning; no authority is granted by this artifact."
         evidence_refs=list(task.get("evidence_refs") or [])
         if report.get("evidence_id") and report["evidence_id"] not in evidence_refs:
             evidence_refs.append(report["evidence_id"])
+        # V2: confidence is NOT derived from lifecycle completion; without independently
+        # verified evidence it stays 0.0 (UNKNOWN != confident).
         artifact=build_learning_artifact_v3(
             artifact_id=f"LA3-{uuid.uuid4().hex}", artifact_type="observed_learning", artifact_revision=1,
             source="go_runtime.runtime", provenance={"commit":self.commit,"tree":self.tree,"environment":self.environment,"task_id":task_id},
             observation=observation, lesson=lesson, generalization=generalization, evidence_refs=evidence_refs,
             validation_refs=(), validation_assessment_summary=None, capability_impacts=(),
-            confidence=1.0 if observed_state=="COMPLETED" else 0.0, known_failures=(),
+            confidence=0.0, known_failures=(),
             learning_state="OBSERVED", model_eligibility_ref=None, model_eligibility_summary=None,
             lineage={"task_id":task_id, "evidence_id":report.get("evidence_id"), "replay_id":report.get("replay_id")},
         )
