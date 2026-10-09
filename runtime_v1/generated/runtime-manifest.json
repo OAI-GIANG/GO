@@ -1,0 +1,10 @@
+{
+  "runtime_id": "HG-GENERATED-V1",
+  "runtime_status": "GENERATED",
+  "source_sha256": "cc1a8b171b1c0e194923359b5b8b17ee9e9ff646b33693cc983f2a9984cc21af",
+  "source_file_sha256": "cc1a8b171b1c0e194923359b5b8b17ee9e9ff646b33693cc983f2a9984cc21af",
+  "entrypoint": "runtime.py",
+  "generated_from": "control/MASTER_GOVERNANCE_RULESET_V1.md",
+  "legacy_runtime_fallback": false,
+  "source_internal_metadata_conflict": "DISCLOSED_IN_APPROVAL_BINDING"
+}

@@ -1,0 +1,12 @@
+{
+  "record_type": "OWNER_APPROVAL_BINDING",
+  "ruleset": "MASTER GOVERNANCE RULESET V1",
+  "source_path": "control/MASTER_GOVERNANCE_RULESET_V1.md",
+  "source_sha256": "cc1a8b171b1c0e194923359b5b8b17ee9e9ff646b33693cc983f2a9984cc21af",
+  "approval_status": "OWNER_CONFIRMED_APPROVED_IN_CURRENT_CONVERSATION",
+  "approval_scope": "Use this exact source as sole governing source; do not modify its bytes.",
+  "source_internal_metadata_conflict": "The source's own final section still says CONSOLIDATED_DRAFT_V3_READY_FOR_OWNER_REVIEW — NOT APPROVED. Preserved unchanged per owner instruction. Current owner direction establishes the approval status for this cutover; this conflict remains disclosed rather than silently rewriting the source.",
+  "runtime_status": "NOT_GENERATED_AT_RECORD_CREATION",
+  "created_by": "STT via Remote Desktop Commander",
+  "note": "This binding record is metadata and is not a competing ruleset."
+}
