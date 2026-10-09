@@ -1,7 +1,8 @@
-"""Pytest session fixture: provision an EXTERNAL authority root key.
+"""Pytest fixture: provide a file-backed authority root for tests by default.
 
-P0-A makes AuthorityRoot.issue() hard-deny EPHEMERAL/SELF_PROVISIONED roots, so the
-runtime requires an externally provisioned root in tests too (mirrors production).
+The current Personal Production contract permits the canonical runtime-owned
+SELF_PROVISIONED root. P0-A tests explicitly remove this fixture setting to
+exercise that path; unrelated tests use the file-backed root for isolation.
 """
 from __future__ import annotations
 

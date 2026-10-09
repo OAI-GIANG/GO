@@ -15,8 +15,8 @@ from runtime.go_runtime.core.cognitive import CognitiveService
 from runtime.go_runtime.core.store import RuntimeStore
 
 
-def _deny_provenance(monkeypatch):
-    """Force a SELF_PROVISIONED (in-process) root and reset the singleton."""
+def _runtime_owned_root(monkeypatch):
+    """Force a SELF_PROVISIONED runtime-owned root and reset the singleton."""
     monkeypatch.delenv("HG_AUTHORITY_ROOT_KEY_FILE", raising=False)
     AuthorityRoot._instance = None
     return AuthorityRoot.instance()
@@ -24,7 +24,7 @@ def _deny_provenance(monkeypatch):
 
 # ---------------- runtime-owned root positive path ----------------
 def test_direct_issue_allowed_for_runtime_owned_root(monkeypatch):
-    root = _deny_provenance(monkeypatch)
+    root = _runtime_owned_root(monkeypatch)
     assert root.provenance() == "SELF_PROVISIONED"
     assert root.is_external() is False
     tok = root.issue(subject="s", scope=["runtime"], action="execute", audience="kernel", ttl_s=60)
@@ -32,7 +32,7 @@ def test_direct_issue_allowed_for_runtime_owned_root(monkeypatch):
 
 
 def test_delegation_allowed_for_runtime_owned_root(monkeypatch):
-    root = _deny_provenance(monkeypatch)
+    root = _runtime_owned_root(monkeypatch)
     parent = root.issue(subject="root", scope=["runtime"], action="execute", audience="kernel", ttl_s=60)
     child = root.delegate(parent, subject="child", scope=["runtime"], action="execute", audience="kernel", ttl_s=30)
     assert root.verify(child, action="execute", scope=["runtime"], audience="kernel")
@@ -40,7 +40,7 @@ def test_delegation_allowed_for_runtime_owned_root(monkeypatch):
 
 # ---------------- execution-path positive (caller -> callee -> root) ----------------
 def test_cognitive_authorize_allowed_without_external_root(tmp_path, monkeypatch):
-    _deny_provenance(monkeypatch)
+    _runtime_owned_root(monkeypatch)
     store = RuntimeStore(Path(tmp_path) / "go.sqlite3")
     cog = CognitiveService(store, "C", "T", "test")
     auth_id = cog.authorize("TASK-P0A-POS", "echo")
@@ -49,7 +49,7 @@ def test_cognitive_authorize_allowed_without_external_root(tmp_path, monkeypatch
 
 
 def test_restart_rotates_runtime_owned_root_and_invalidates_old_token(monkeypatch):
-    root = _deny_provenance(monkeypatch)
+    root = _runtime_owned_root(monkeypatch)
     token = root.issue(subject="s", scope=["runtime"], action="execute", audience="kernel", ttl_s=60)
     AuthorityRoot._instance = None
     restarted = AuthorityRoot.instance()
@@ -90,7 +90,7 @@ def test_execution_path_positive_with_external_root(tmp_path):
 
 # ---------------- explicit negative acceptance cases ----------------
 def test_runtime_owned_token_rejects_wrong_action(monkeypatch):
-    root = _deny_provenance(monkeypatch)
+    root = _runtime_owned_root(monkeypatch)
     token = root.issue(subject="alice", scope=["runtime"], action="execute", audience="kernel", ttl_s=60)
 
     assert not root.verify(token, action="admin", scope=["runtime"], audience="kernel")
@@ -100,7 +100,7 @@ def test_runtime_owned_token_rejects_wrong_action(monkeypatch):
 
 
 def test_runtime_owned_token_rejects_wrong_expected_subject(monkeypatch):
-    root = _deny_provenance(monkeypatch)
+    root = _runtime_owned_root(monkeypatch)
     token = root.issue(subject="alice", scope=["runtime"], action="execute", audience="kernel", ttl_s=60)
 
     with pytest.raises(AuthorityError) as exc:
