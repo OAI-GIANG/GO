@@ -17,6 +17,7 @@ from .vps2_execution_bridge import VPS2ExecutionBridge, BridgeRequest, Operation
 from .cognitive import CognitiveService
 from .tool_runtime import default_tool_registry
 from .tool_governance import ToolGovernance, ToolGovernanceError
+from .governance_source import verify_governance_source
 from runtime.go_kernel import GateResult
 
 VERSION = "0.1.1"
@@ -40,7 +41,7 @@ class RuntimeConfig:
 class GOApplication:
     """GO runtime. TaskContract owns intent; Submission owns submitted work; DurableExecution owns execution state."""
     def __init__(self, config: RuntimeConfig):
-        config.validate(); self.config=config
+        config.validate(); verify_governance_source(); self.config=config
         from .store import RuntimeStore
         self.store=RuntimeStore(config.data_path)
         self.durable=DurableExecution(self.store)
@@ -72,6 +73,7 @@ class GOApplication:
         )
 
     def execute_vps2(self, body: dict[str, Any]) -> dict[str, Any]:
+        verify_governance_source()
         bridge = self._vps2_bridge()
 
         def required_string(name: str) -> str:
@@ -121,9 +123,10 @@ class GOApplication:
         return sorted({"echo","ask"}|names)
 
     def status(self)->dict[str,Any]:
-        return {"name":"GO","version":VERSION,"status":"RUNNING","host":socket.gethostname(),"commit":self.config.commit,"tree":self.config.tree,"environment":self.config.environment,"data_path":str(self.config.data_path),"started_at":self.store.get_meta("started_at"),"operations":self._operations(),"integration":"GO_NATIVE_ENGINE"}
+        return {"name":"GO","version":VERSION,"status":"RUNNING","host":socket.gethostname(),"commit":self.config.commit,"tree":self.config.tree,"environment":self.config.environment,"data_path":str(self.config.data_path),"started_at":self.store.get_meta("started_at"),"operations":self._operations(),"integration":"GO_NATIVE_ENGINE","governance":verify_governance_source()}
 
     def execute(self, task_id:str, operation:str, payload:dict[str,Any])->dict[str,Any]:
+        verify_governance_source()
         request=__import__("runtime.go_runtime.core.contracts",fromlist=["CognitiveRequest"]).CognitiveRequest(task_id,operation,payload,self.config.commit,self.config.tree,self.config.environment)
         advice=self.cognitive.advise(request); self.cognitive.authorize(task_id,operation)
         context=self.cognitive.reasoning_context(advice)
@@ -134,7 +137,7 @@ class GOApplication:
         candidate = __import__("runtime.go_kernel", fromlist=["Evidence"]).Evidence(
             evidence["evidence_id"], task_id, "runtime", evidence["source"],
             datetime.fromisoformat(evidence["captured_at"]), evidence["provenance"],
-            evidence["integrity"], evidence["verification_status"], evidence["claim"]
+            evidence["integrity"], evidence["verification_status"], evidence["claim"], evidence.get("governance_source_sha256", "")
         )
         verification, promoted = self.cognitive.kernel.verify_and_promote_evidence(candidate, task_id, "runtime")
         if verification is not GateResult.ALLOW or promoted is None:
@@ -152,6 +155,7 @@ class GOApplication:
     TOOL_OPS = {"github.read_repo", "github.read_branch", "github.read_file", "github.read_releases"}
 
     def execute_tool(self, task_id: str, operation: str, payload: dict[str, Any], approval: str = "not_required") -> dict[str, Any]:
+        verify_governance_source()
         governance = ToolGovernance(self.tools)
         result = governance.execute(task_id, operation, dict(payload), approval)
         report = {"operation": operation, "tool": result.tool_name, "ok": result.ok, "call_id": result.call_id,
@@ -164,6 +168,7 @@ class GOApplication:
 
     def run_objective(self, task_id: str, payload: dict[str, Any], approval: str = "not_required") -> dict[str, Any]:
         """OBJECTIVE -> discovery -> bounded selection -> governed execution -> failure policy."""
+        verify_governance_source()
         from .engine import objective_router as orx
         objective = str(payload.get("objective") or payload.get("text") or "").strip()
         if not objective:
@@ -188,6 +193,7 @@ class GOApplication:
         return trace
 
     def submit(self, body:dict[str,Any])->dict[str,Any]:
+        verify_governance_source()
         task_id=str(body.get("task_id") or f"TASK-{uuid.uuid4().hex}")
         operation=str(body.get("operation") or "").strip().lower(); payload=body.get("payload")
         idem=str(body.get("idempotency_key") or task_id)
@@ -237,13 +243,22 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(value,dict): raise ValueError("JSON body must be an object")
         return value
     def do_GET(self)->None:
-        if self.path=="/healthz": self._json(HTTPStatus.OK,{"status":"ok","version":VERSION}); return
+        if self.path=="/healthz":
+            try:
+                governance=verify_governance_source()
+            except Exception as exc:
+                self._json(HTTPStatus.SERVICE_UNAVAILABLE,{"status":"blocked","version":VERSION,"governance":{"status":"BLOCKED","reason":type(exc).__name__}}); return
+            self._json(HTTPStatus.OK,{"status":"ok","version":VERSION,"governance":governance}); return
         if not self._authorized(): self._json(HTTPStatus.UNAUTHORIZED,{"error":"unauthorized"}); return
         if self.path=="/v1/status": self._json(HTTPStatus.OK,self.app.status()); return
         if self.path.startswith("/v1/tasks/"):
             task=self.app.store.get_task(self.path.rsplit("/",1)[-1]); self._json(HTTPStatus.NOT_FOUND if task is None else HTTPStatus.OK,{"error":"task not found"} if task is None else task); return
         self._json(HTTPStatus.NOT_FOUND,{"error":"not found"})
     def do_POST(self)->None:
+        try:
+            verify_governance_source()
+        except Exception as exc:
+            self._json(HTTPStatus.SERVICE_UNAVAILABLE,{"error":"V1_POLICY_INVALID","reason":type(exc).__name__}); return
         if self.path=="/v1/vps2/execute":
             if not self._authorized():
                 self._json(HTTPStatus.UNAUTHORIZED, {"error":"unauthorized"}); return

@@ -1,0 +1,2 @@
+# Canonical governance source is hash-pinned; preserve exact bytes across Windows/Linux checkouts.
+/control/MASTER_GOVERNANCE_RULESET_V1.md -text
