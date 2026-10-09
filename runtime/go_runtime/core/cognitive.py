@@ -14,6 +14,7 @@ from .engine.go_learning import build_go_hint, compute_go_learning
 from runtime.go_kernel import Authority, Evidence, GateResult, Kernel
 from .contracts import CognitiveAdvice, CognitiveRequest, ModelRequest
 from .model_gateway import ModelGateway
+from .governance_source import verify_governance_source
 from .store import RuntimeStore
 
 class CognitiveService:
@@ -123,18 +124,20 @@ class CognitiveService:
         return output
 
     def emit_evidence(self, task_id: str, event_type: str, claim: str) -> dict[str, Any]:
+        policy = verify_governance_source()
         evidence_id = f"EVD-{uuid.uuid4().hex}"
         captured = datetime.now(timezone.utc)
         source = "go_runtime.runtime"
         provenance = f"{self.commit}:{self.tree}:{self.environment}"
-        canonical = "|".join((evidence_id, task_id, "runtime", source, captured.isoformat(), provenance))
+        canonical = "|".join((evidence_id, task_id, "runtime", source, captured.isoformat(), provenance, policy["source_sha256"]))
         integrity = sha256(canonical.encode()).hexdigest()
-        evidence = Evidence(evidence_id, task_id, "runtime", source, captured, provenance, integrity, "UNVERIFIED", claim)
+        evidence = Evidence(evidence_id, task_id, "runtime", source, captured, provenance, integrity, "UNVERIFIED", claim, policy["source_sha256"])
         if self.kernel.evidence_admission_status(evidence, task_id, "runtime") is not GateResult.ALLOW:
             raise RuntimeError("canonical evidence failed admission checks")
         record = {"evidence_id": evidence_id, "task_id": task_id, "event_type": event_type,
                   "claim": claim, "source": source, "provenance": provenance, "integrity": integrity,
-                  "verification_status": "UNVERIFIED", "captured_at": captured.isoformat()}
+                  "verification_status": "UNVERIFIED", "captured_at": captured.isoformat(),
+                  "governance_source_sha256": policy["source_sha256"]}
         self.store.save_evidence(record, captured.isoformat())
         return record
 

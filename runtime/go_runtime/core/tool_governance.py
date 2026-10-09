@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .tool_runtime import ToolContext, ToolRegistry, ToolResult, _digest
+from .governance_source import verify_governance_source
 from runtime.go_kernel import Authority, Execution, GateResult, Kernel, now_utc
 
 STATES=("ACCEPTED","VALIDATED","AUTHORIZATION_PENDING","APPROVED","STARTED","COMPLETED","FAILED","DENIED","CANCELLED")
@@ -69,8 +70,9 @@ class ToolEventLedger:
 class ToolGovernance:
     def __init__(self,registry:ToolRegistry, ledger_path:Path|None=None):
         self.registry=registry; self.kernel=Kernel(); self.ledger=ToolEventLedger(ledger_path or Path(os.getenv("HG_TOOL_EVENT_LEDGER","./data/tool-events.jsonl")))
+        self._governance_source_sha256 = None
     def _emit(self,call_id,task_id,tool_name,state,**extra):
-        event={"event_id":"TE-"+uuid.uuid4().hex,"call_id":call_id,"task_id":task_id,"tool_name":tool_name,"state":state,"occurred_at":_now(),"contract_version":"TOOL-GOVERNANCE-V1",**extra}
+        event={"event_id":"TE-"+uuid.uuid4().hex,"call_id":call_id,"task_id":task_id,"tool_name":tool_name,"state":state,"occurred_at":_now(),"contract_version":"TOOL-GOVERNANCE-V1","governance_source_sha256":self._governance_source_sha256,**extra}
         self.ledger.append(event); return event
     def _transition(self,call_id,task_id,tool_name,current,new,**extra):
         if new not in TRANSITIONS.get(current,set()): raise ToolGovernanceError("INVALID_TOOL_STATE_TRANSITION",f"{current}->{new}")
@@ -83,7 +85,14 @@ class ToolGovernance:
         if not subject.startswith("HG_SESSION_"): return None
         now=now_utc()
         return Authority("AUTH-TOOL-"+hashlib.sha256((subject+tool_name).encode()).hexdigest()[:16],subject,frozenset({f"tool:{tool_name}"}),frozenset({"execute"}),"HG_KERNEL",now,now+timedelta(minutes=5),frozenset({task_id}),"ACTIVE",provenance)
+    def _result(self, call_id, name, ok, output, witness):
+        bound = dict(witness)
+        bound["governance_source_sha256"] = self._governance_source_sha256
+        return ToolResult(call_id, name, ok, output, bound)
+
     def execute(self,task_id:str,name:str,arguments:dict[str,Any],approval="not_required",call_id=None)->ToolResult:
+        policy_state = verify_governance_source()
+        self._governance_source_sha256 = policy_state["source_sha256"]
         adapter=self.registry._tools.get(name)
         if adapter is None: raise ToolGovernanceError("TOOL_NOT_FOUND")
         spec=adapter.spec(); cid=call_id or "CALL-"+uuid.uuid4().hex
@@ -92,44 +101,44 @@ class ToolGovernance:
         if prior:
             if prior.get("arguments_digest")!=arg_digest or prior.get("tool_name")!=name: raise ToolGovernanceError("CALL_ID_REUSE_CONFLICT")
             if prior.get("state") in TERMINAL and "output" in prior:
-                return ToolResult(cid,name,prior["state"]=="COMPLETED",prior["output"],prior.get("witness",{}))
+                return self._result(cid,name,prior["state"]=="COMPLETED",prior["output"],prior.get("witness",{}))
         duplicate=None
         for e in self.ledger._read():
             if e.get("idempotency_key")==key and e.get("state") in TERMINAL: duplicate=e; break
         if duplicate and duplicate.get("call_id")!=cid:
-            return ToolResult(cid,name,duplicate.get("state")=="COMPLETED",duplicate.get("output",{"error":"DUPLICATE_IDEMPOTENCY_KEY"}),duplicate.get("witness",{}))
+            return self._result(cid,name,duplicate.get("state")=="COMPLETED",duplicate.get("output",{"error":"DUPLICATE_IDEMPOTENCY_KEY"}),duplicate.get("witness",{}))
         self._emit(cid,task_id,name,"ACCEPTED",arguments_digest=arg_digest,idempotency_key=key)
         try: validate_schema(spec.input_schema,arguments)
         except ToolGovernanceError as exc:
             self._emit(cid,task_id,name,"DENIED",reason=exc.code,arguments_digest=arg_digest)
-            return ToolResult(cid,name,False,{"error":exc.code,"message":str(exc)},{"call_id":cid,"tool_name":name,"task_id":task_id,"status":"DENIED","arguments_digest":arg_digest,"error_type":exc.code,"contract_version":"TOOL-GOVERNANCE-V1"})
+            return self._result(cid,name,False,{"error":exc.code,"message":str(exc)},{"call_id":cid,"tool_name":name,"task_id":task_id,"status":"DENIED","arguments_digest":arg_digest,"error_type":exc.code,"contract_version":"TOOL-GOVERNANCE-V1"})
         self._transition(cid,task_id,name,"ACCEPTED","VALIDATED",arguments_digest=arg_digest,idempotency_key=key)
         self._transition(cid,task_id,name,"VALIDATED","AUTHORIZATION_PENDING",arguments_digest=arg_digest)
         auth=self._authority(task_id,name)
         if auth is None:
             self._emit(cid,task_id,name,"DENIED",reason="AUTHORITY_PROVENANCE_MISSING",arguments_digest=arg_digest)
-            return ToolResult(cid,name,False,{"error":"AUTHORITY_PROVENANCE_MISSING"},{"call_id":cid,"tool_name":name,"task_id":task_id,"status":"DENIED","arguments_digest":arg_digest,"contract_version":"TOOL-GOVERNANCE-V1"})
+            return self._result(cid,name,False,{"error":"AUTHORITY_PROVENANCE_MISSING"},{"call_id":cid,"tool_name":name,"task_id":task_id,"status":"DENIED","arguments_digest":arg_digest,"contract_version":"TOOL-GOVERNANCE-V1"})
         gate,authorization=self.kernel.authorize(auth,auth.subject,"execute",f"tool:{name}",task_id)
         if gate is not GateResult.ALLOW or authorization is None:
-            self._emit(cid,task_id,name,"DENIED",reason="KERNEL_DENY",arguments_digest=arg_digest); return ToolResult(cid,name,False,{"error":"KERNEL_DENY"},{"call_id":cid,"tool_name":name,"task_id":task_id,"status":"DENIED","arguments_digest":arg_digest,"contract_version":"TOOL-GOVERNANCE-V1"})
+            self._emit(cid,task_id,name,"DENIED",reason="KERNEL_DENY",arguments_digest=arg_digest); return self._result(cid,name,False,{"error":"KERNEL_DENY"},{"call_id":cid,"tool_name":name,"task_id":task_id,"status":"DENIED","arguments_digest":arg_digest,"contract_version":"TOOL-GOVERNANCE-V1"})
         if spec.destructive and approval!="approved":
-            self._emit(cid,task_id,name,"DENIED",reason="APPROVAL_REQUIRED",arguments_digest=arg_digest); return ToolResult(cid,name,False,{"error":"APPROVAL_REQUIRED"},{"call_id":cid,"tool_name":name,"task_id":task_id,"status":"DENIED","arguments_digest":arg_digest,"contract_version":"TOOL-GOVERNANCE-V1"})
+            self._emit(cid,task_id,name,"DENIED",reason="APPROVAL_REQUIRED",arguments_digest=arg_digest); return self._result(cid,name,False,{"error":"APPROVAL_REQUIRED"},{"call_id":cid,"tool_name":name,"task_id":task_id,"status":"DENIED","arguments_digest":arg_digest,"contract_version":"TOOL-GOVERNANCE-V1"})
         self._transition(cid,task_id,name,"AUTHORIZATION_PENDING","APPROVED",approval=approval,arguments_digest=arg_digest)
         self._transition(cid,task_id,name,"APPROVED","STARTED",arguments_digest=arg_digest)
         execution=Execution(cid,"execute",auth.subject,f"tool:{name}",1,authorization,True,cid)
         if self.kernel.execute_external(execution) is not GateResult.ALLOW:
             self._emit(cid,task_id,name,"DENIED",reason="KERNEL_EXECUTION_GATE",arguments_digest=arg_digest)
-            return ToolResult(cid,name,False,{"error":"KERNEL_EXECUTION_GATE"},{"call_id":cid,"tool_name":name,"task_id":task_id,"status":"DENIED","arguments_digest":arg_digest,"contract_version":"TOOL-GOVERNANCE-V1"})
+            return self._result(cid,name,False,{"error":"KERNEL_EXECUTION_GATE"},{"call_id":cid,"tool_name":name,"task_id":task_id,"status":"DENIED","arguments_digest":arg_digest,"contract_version":"TOOL-GOVERNANCE-V1"})
         try:
             result=self.registry.dispatch(name,arguments,ToolContext(task_id,approval),cid)
             state="COMPLETED" if result.ok else "FAILED"
             witness=dict(result.witness); witness.update({"scope":f"tool:{name}","subject":auth.subject,"witness_digest":_digest({"call_id":cid,"tool_name":name,"status":state,"output_digest":witness.get("output_digest")})})
             self._emit(cid,task_id,name,state,arguments_digest=arg_digest,output=result.output,witness=witness,idempotency_key=key)
-            return ToolResult(cid,name,result.ok,result.output,witness)
+            return self._result(cid,name,result.ok,result.output,witness)
         except Exception as exc:
             witness={"call_id":cid,"tool_name":name,"task_id":task_id,"status":"FAILED","arguments_digest":arg_digest,"error_type":type(exc).__name__,"contract_version":"TOOL-GOVERNANCE-V1"}
             self._emit(cid,task_id,name,"FAILED",arguments_digest=arg_digest,error_type=type(exc).__name__,witness=witness,idempotency_key=key)
-            return ToolResult(cid,name,False,{"error":type(exc).__name__,"message":str(exc)},witness)
+            return self._result(cid,name,False,{"error":type(exc).__name__,"message":str(exc)},witness)
     def replay(self,call_id):
         events=self.ledger.events(call_id)
         if not events: raise ToolGovernanceError("REPLAY_NOT_FOUND")

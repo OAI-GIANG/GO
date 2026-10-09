@@ -54,10 +54,14 @@ class Evidence:
     integrity: str
     verification_status: str
     claim: str = ""
+    governance_source_sha256: str = ""
 
     def canonical_payload(self) -> str:
-        return "|".join((self.evidence_id, self.subject, self.scope, self.source,
-                         self.captured_at.isoformat(), self.provenance))
+        fields = (self.evidence_id, self.subject, self.scope, self.source,
+                  self.captured_at.isoformat(), self.provenance)
+        if self.governance_source_sha256:
+            fields = fields + (self.governance_source_sha256,)
+        return "|".join(fields)
 
     def expected_integrity(self) -> str:
         return sha256(self.canonical_payload().encode("utf-8")).hexdigest()
@@ -183,14 +187,14 @@ class Kernel:
         """Verify canonical evidence and return a new VERIFIED record only on success."""
         if self.verify_evidence(
             Evidence(evidence.evidence_id, evidence.subject, evidence.scope, evidence.source,
-                     evidence.captured_at, evidence.provenance, evidence.integrity, "VERIFIED", evidence.claim),
+                     evidence.captured_at, evidence.provenance, evidence.integrity, "VERIFIED", evidence.claim, evidence.governance_source_sha256),
             subject,
             scope,
         ) is not GateResult.ALLOW:
             return GateResult.BLOCKED, None
         promoted = Evidence(
             evidence.evidence_id, evidence.subject, evidence.scope, evidence.source,
-            evidence.captured_at, evidence.provenance, evidence.integrity, "VERIFIED", evidence.claim,
+            evidence.captured_at, evidence.provenance, evidence.integrity, "VERIFIED", evidence.claim, evidence.governance_source_sha256,
         )
         return GateResult.ALLOW, promoted
 
