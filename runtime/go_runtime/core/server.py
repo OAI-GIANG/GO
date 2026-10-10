@@ -171,7 +171,28 @@ class GOApplication:
 
     TOOL_OPS = {"github.read_repo", "github.read_branch", "github.read_file", "github.read_releases"}
 
-    def execute_tool(self, task_id: str, operation: str, payload: dict[str, Any], approval: str = "not_required") -> dict[str, Any]:
+    @staticmethod
+    def _deserialize_approval(raw: Any) -> Any:
+        """Transport deserialization for the HTTP submission path.
+
+        Never coerces an approval object to a string. Returns the sentinel
+        "not_required" or a strictly validated ``ApprovalEvidence`` object; raises
+        ValueError on any malformed payload (callers map this to HTTP 400, so
+        nothing is executed). Cryptographic/binding verification happens later in
+        ToolGovernance via the trusted issuer.
+        """
+        from .approval import ApprovalEvidence
+        if raw is None:
+            return "not_required"
+        if isinstance(raw, str):
+            if raw.strip() in ("", "not_required"):
+                return "not_required"
+            raise ValueError("approval must be a JSON object (a string is not approval evidence)")
+        if isinstance(raw, dict):
+            return ApprovalEvidence.from_json(raw)
+        raise ValueError("approval must be a JSON object or 'not_required'")
+
+    def execute_tool(self, task_id: str, operation: str, payload: dict[str, Any], approval: Any = "not_required") -> dict[str, Any]:
         verify_governance_source()
         governance = ToolGovernance(self.tools)
         result = governance.execute(task_id, operation, dict(payload), approval)
@@ -183,7 +204,7 @@ class GOApplication:
                              utc_now())
         return report
 
-    def run_objective(self, task_id: str, payload: dict[str, Any], approval: str = "not_required") -> dict[str, Any]:
+    def run_objective(self, task_id: str, payload: dict[str, Any], approval: Any = "not_required") -> dict[str, Any]:
         """OBJECTIVE -> discovery -> bounded selection -> governed execution -> failure policy."""
         verify_governance_source()
         from .engine import objective_router as orx
@@ -228,7 +249,7 @@ class GOApplication:
         operation=str(metadata.get("operation") or operation); payload=dict(metadata.get("payload") or payload)
         try:
             tool_names=set(self.tools._tools)
-            approval=str(body.get("approval") or "not_required")
+            approval=self._deserialize_approval(body.get("approval"))
             if operation=="objective.run":
                 result=self.run_objective(task_id,payload,approval=approval)
             elif operation in tool_names:

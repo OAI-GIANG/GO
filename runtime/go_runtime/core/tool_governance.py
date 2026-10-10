@@ -134,7 +134,8 @@ class ToolGovernance:
         if spec.destructive:
             from .approval import verify_approval
             valid, reason = verify_approval(approval, subject=auth.subject, tool_name=name,
-                arguments_digest=arg_digest, policy_sha256=str(self._governance_source_sha256 or ""), scope=f"tool:{name}")
+                arguments_digest=arg_digest, policy_sha256=str(self._governance_source_sha256 or ""),
+                scope=f"tool:{name}", target=name)
             if not valid:
                 return self._result(cid,name,False,{"error":reason},
                     {"call_id":cid,"tool_name":name,"task_id":task_id,"status":"DENIED","arguments_digest":arg_digest,"contract_version":"TOOL-GOVERNANCE-V1"})

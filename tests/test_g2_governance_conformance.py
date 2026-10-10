@@ -85,12 +85,35 @@ def test_g2_unify_evidence_present():
     assert hasattr(Kernel, "unify_evidence")
 
 
-def test_g2_server_entrypoints_guard_governance():
-    src = Path("runtime/go_runtime/core/server.py").read_text(encoding="utf-8")
-    # every side-effect entry point runs the governance-source guard
-    assert src.count("verify_governance_source()") >= 5
-    # vps2 target identity comes from the request (or env), not a hardcoded value
-    assert "req.target_id or" in src
+def test_g2_entrypoints_fail_closed_on_invalid_governance(monkeypatch):
+    from runtime.go_runtime.core import server as srv
+
+    def _boom():
+        raise RuntimeError("V1_CANONICAL_SOURCE_MISSING")
+
+    monkeypatch.setattr(srv, "verify_governance_source", _boom)
+    app = object.__new__(srv.GOApplication)  # bypass __init__; the guard runs before other attrs
+    calls = [
+        (app.execute_tool, ("t", "x", {})),
+        (app.execute, ("t", "echo", {})),
+        (app.run_objective, ("t", {"objective": "x"})),
+        (app.submit, ({"operation": "echo", "payload": {}},)),
+        (app.execute_vps2, ({},)),
+    ]
+    for fn, args in calls:
+        with pytest.raises(RuntimeError):
+            fn(*args)
+
+
+def test_g2_unify_evidence_behavior():
+    import datetime as _dt
+    from runtime.go_kernel import Kernel, Evidence
+    now = _dt.datetime.now(_dt.timezone.utc)
+    e1 = Evidence("E1", "s", "sc", "src", now, "prov", "h1", "UNVERIFIED", "c")
+    out = Kernel().unify_evidence([e1])
+    assert out["count"] == 1 and out["schema"] and out["conflicts"] == {}
+    dup = Kernel().unify_evidence([e1, e1])
+    assert dup["duplicate_representations"].get("E1") == 2
 
 
 def test_g2_tool_witness_binds_governance_hash(tmp_path, monkeypatch):
