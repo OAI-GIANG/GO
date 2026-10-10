@@ -9,6 +9,7 @@ public final class TermuxResultReceiver extends BroadcastReceiver {
     public static final String ACTION_RESULT = "com.hg.phoneagent.TERMUX_RESULT";
 
     @Override public void onReceive(Context context, Intent intent) {
+        try { TermuxDispatch.deliver(intent.getStringExtra("request_id"), intent.getStringExtra("stdout")); } catch (Throwable ignored) {}
         // V1 keeps the callback boundary explicit. The Agent owns transport/result
         // correlation; this receiver only captures Termux completion metadata.
         // No arbitrary command output is trusted as governance/evidence.
