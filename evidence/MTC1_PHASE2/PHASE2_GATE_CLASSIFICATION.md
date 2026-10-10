@@ -11,7 +11,7 @@ Raw captures: `tests/OUTPUT_*.txt`.
 | Gate | Class | Status | Evidence |
 |---|---|---|---|
 | B1 — `go_health` (VPS1 GO liveness + authenticated 200) | **REQUIRED** | **PASS** (runtime) | `/healthz` ok; `/v1/status` Bearer 200; no-token 401 (`OUTPUT_vps1_runtime.txt`) |
-| B2 — tunnel (single/stable, `queue=0`, `GATE_REQUEST 200`) | **REQUIRED** | **BLOCKED** (E2E PASS; live-restart test pending) | runit service; gate 200 @11:56:37Z; queue=0; 1/1/1; no restart loop; negatives + Linux restart/dup E2E PASS (`tests/OUTPUT_b2_runtime_verified.txt`) |
+| B2 — tunnel (single/stable, `queue=0`, `GATE_REQUEST 200`) | **REQUIRED** | **PASS** (runtime) | runit service; restart → supervisor 13890→30181, tunnel persisted, counts 1/1/1 (no duplicate); post-restart gate 200 @12:20:51Z/@12:21:02Z; queue=0 (`tests/OUTPUT_b2_post_restart_pass.txt`) |
 | TLS — valid cert + active renewal (edge health continuity) | **REQUIRED** | **PASS** (runtime) | cert `notAfter 2026-10-17`; `certbot-renew.timer` active |
 | B5-a — deny-list + canonical fail-closed on runtime | **REQUIRED** | **PASS** (runtime) | canonical `ToolGovernance` DENY on VPS1; production ledger DENIED events |
 | B5-a — phone toolplane hash-chain audit (`audit_tail`) | **CONDITIONAL** | **BLOCKED** (needs Termux) | phone audit is Termux-private; canonical runtime ledger is the runtime audit |
@@ -59,9 +59,8 @@ provided the canonical runtime ledger is accepted as the runtime audit of record
 
 ## 5. Final status
 
-**INCOMPLETE.** B5-b ALLOW now **PASS** (external authority provisioned; COMPLETED + witness +
-ledger). B1/VPS1, TLS, B5-a canonical, B5-b DENY and evidence are PASS. However **B2 tunnel is
-currently FAIL (regressed)** — the supervisor was a manual `nohup` process and did not survive a
-Termux/runit restart; it is not a managed service. Restoring B2 is the only remaining REQUIRED
-item (owner Termux action in `tests/OUTPUT_regression_20261010T1146.txt`). B4/GPT and phone-local
-GO are OUT_OF_SCOPE.
+**COMPLETED.** All REQUIRED gates PASS with runtime evidence: B1/VPS1, **B2** (runit-managed;
+post-restart HTTP 200; queue=0/pending=0; correlated `GATE_REQUEST`; no duplicate on restart),
+TLS (renewed + timer), B5-a canonical fail-closed + ledger, B5-b DENY, **B5-b ALLOW** (external
+authority; COMPLETED + witness + ledger `STARTED→COMPLETED`), and evidence/manifest. B4/GPT and
+phone-local GO are OUT_OF_SCOPE.

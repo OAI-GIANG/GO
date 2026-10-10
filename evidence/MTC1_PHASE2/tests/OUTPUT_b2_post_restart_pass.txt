@@ -1,0 +1,45 @@
+MTC-1.0 — B2 POST-RESTART E2E — PASS — 2026-10-10T12:20–12:21Z
+
+Build/identity: repo branch feature/stt-b1-b5-reconciliation-20261010 @ commit ad6fe947c8c97c493c58ac7a660adc565485c707
+Deployed artifact: /sdcard/HG-GO-DEPLOY/health-tunnel.py sha256 790de550ced4cb75a2445c4a07f6bca6e18f0dec579fbc4d0683fbfd675e6889
+VPS1: 160.191.242.198 (vps-hjcscw). No secret values recorded.
+
+== Restart event (owner-initiated; Deep did not kill anything) ==
+- Before: runsv hg-health-tunnel=13889 -> supervisor=13890 -> tunnel=14085 (PPid 1)
+- After : runsv hg-health-tunnel=13889 -> supervisor=30181 -> tunnel=14085 (PPid 1, SAME tunnel)
+- Counts after restart: tunnel=1, supervisor=1, runsv=1  (NO duplicate tunnel)
+=> service restart replaced the supervisor while the existing tunnel persisted and the new
+   supervisor did not spawn a second tunnel. restart/recovery-without-duplicate = PROVEN live.
+
+== Fresh authenticated requests (after restart) ==
+Request #1: vps1_utc 2026-10-10T12:20:51Z
+  GET https://160.191.242.198/h/phone-primary-u0_a460/api/health  (Authorization: Bearer <HG_GATE_TOKEN>)
+  -> HTTP 200
+  body: {"ok":true,"runtime":"HG_TUNNEL_HEALTH","transport":"edge-http-long-poll",
+         "device_id":"phone-primary-u0_a460","host":"localhost","python":"3.14.6",
+         "machine":"aarch64","at":"2026-10-10T12:20:51Z",
+         "scope":"read-only health; no runtime proxy; no write path"}
+Request #2: vps1_utc 2026-10-10T12:21:02Z
+  -> HTTP 200  body {"ok":true,...,"at":"2026-10-10T12:21:02Z"}
+
+== Edge tunnel status (immediately after each) ==
+{"ok":true,"device":"phone-primary-u0_a460","queue":0,"pending":0}   (both times)
+device last_seen: 2026-10-10T12:20:41Z
+
+== Device-side evidence (canonical: /sdcard/hg-tunnel-evidence.jsonl) — NEW, post-restart ==
+{"at":"2026-10-10T12:20:51Z","event":"GATE_REQUEST","request_id":"r_c1cd7223ee1d84eb","path":"/api/health","status":200,"bytes":272}
+{"at":"2026-10-10T12:21:02Z","event":"GATE_REQUEST","request_id":"r_446ba1aa1e7271e3","path":"/api/health","status":200,"bytes":272}
+
+== Correlation ==
+- Edge response `at` == device GATE_REQUEST `at` (12:20:51Z and 12:21:02Z) → the requests were served
+  live by the phone tunnel, not from a cached/old result (old result 11:56:37Z deliberately unused).
+- request IDs r_c1cd7223ee1d84eb (12:20:51Z) and r_446ba1aa1e7271e3 (12:21:02Z) are new.
+
+== Acceptance ==
+A. Termux service (runit-supervised; single instance; python compiled via py_compile; no secret in log) = PASS
+B. Authenticated end-to-end (HTTP 200; queue=0; pending=0; new GATE_REQUEST; correlation) = PASS
+C. Durability & security (restart without duplicate; fail-closed negatives; Linux restart/dup E2E;
+   no regression; external authority unchanged EXTERNAL_FILE mode 600 size 32) = PASS
+D. Evidence integrity (canonical location; UTC timestamps; commit + artifact sha; manifest) = PASS
+
+B2 = PASS.

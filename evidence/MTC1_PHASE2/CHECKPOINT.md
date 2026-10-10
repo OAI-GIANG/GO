@@ -47,8 +47,9 @@ witness + ledger `STARTED→COMPLETED`. Deep will not create the key.
   `tests/OUTPUT_vps2_hardening.txt`.
 
 ## Completion flags
-- `PHASE2_COMPLETED = FALSE` — **B5-b ALLOW PASS**; **B2 E2E PASS** (gate 200, queue=0, runit-managed,
-  single instance) but the **live on-device restart/recovery confirmation** is pending a Termux
-  command Deep cannot run (proven barrier). Once confirmed, every REQUIRED gate is PASS.
+- `PHASE2_COMPLETED = TRUE` — all REQUIRED gates PASS with runtime evidence. **B2 PASS**:
+  runit-managed; restart replaced supervisor (13890→30181) with tunnel persisted (no duplicate,
+  counts 1/1/1); post-restart gate 200 @12:20:51Z & @12:21:02Z; queue=0; new correlated
+  `GATE_REQUEST` (`tests/OUTPUT_b2_post_restart_pass.txt`).
 - `ANDROID_HANDOVER_COMPLETED = TRUE` — owner phone key logged into both VPS1 (2026-10-09) and
   VPS2 (2026-10-10T11:35:42Z); root admin verified; owner controls the key; provider-console recovery.

@@ -14,7 +14,7 @@ Targets: VPS1 `160.191.242.198` (edge + canonical GO `/opt/go`, `127.0.0.1:8877`
 | **B5-b ALLOW E2E** | REQUIRED | **PASS (runtime)** | external root provisioned; `vps1.edge.health` → **COMPLETED** + witness + ledger `STARTED→COMPLETED` + idempotency (`tests/OUTPUT_b5b_allow_pass.txt`) |
 | TLS valid + renewal | REQUIRED | **PASS** (runtime) | `notAfter 2026-10-17`; `certbot-renew.timer` active |
 | Evidence/manifest/SHA | REQUIRED | **PASS** | `MANIFEST.sha256` |
-| **B2 tunnel (single/stable, `queue=0`, gate 200)** | REQUIRED | **BLOCKED** (E2E PASS; one live-restart test pending) | runit service `hg-health-tunnel`; gate **200** @11:56:37Z, queue=0, new `GATE_REQUEST r_164a7d9d471d0306`; 1 tunnel/1 supervisor; no restart loop; negatives + Linux restart/dup E2E PASS. Live on-device restart test needs Termux (`kill` denied, sshd down) → `tests/OUTPUT_b2_runtime_verified.txt` |
+| **B2 tunnel (single/stable, `queue=0`, gate 200)** | REQUIRED | **PASS** (runtime) | runit service `hg-health-tunnel`; restart replaced supervisor (13890→30181) with tunnel persisted (no duplicate; counts 1/1/1); post-restart gate **200** @12:20:51Z & @12:21:02Z, queue=0, new `GATE_REQUEST` correlated; negatives + Linux restart/dup E2E PASS (`tests/OUTPUT_b2_post_restart_pass.txt`) |
 | B5-a phone toolplane hash-chain | CONDITIONAL | BLOCKED | needs Termux |
 | B1 phone-local GO | OUT_OF_SCOPE | n/a | `go_health` targets VPS1 |
 | B4 ChatGPT Action | OUT_OF_SCOPE | n/a | owner decision |
@@ -25,12 +25,12 @@ Targets: VPS1 `160.191.242.198` (edge + canonical GO `/opt/go`, `127.0.0.1:8877`
 closed with a valid external `EXTERNAL_FILE` authority, `COMPLETED`, witness and
 `STARTED→COMPLETED` ledger.
 
-**Regression fixed:** B2 tunnel is now runit-managed (`hg-health-tunnel`) and PASSES end-to-end at
-runtime (gate 200 @11:56:37Z, queue=0, correlated `GATE_REQUEST` in device evidence, single
-instance, no restart loop; fail-closed + Linux restart/duplicate E2E PASS). The only unmet
-acceptance item is a **live on-device restart/recovery confirmation**, which needs a Termux command
-Deep cannot run (`kill` denied for the adb UID; `sshd:8022` down; `RUN_COMMAND` no-op) — see
-`tests/OUTPUT_b2_runtime_verified.txt`.
+## Final status: **COMPLETED**
 
-`PHASE2_COMPLETED = FALSE` (B2 live-restart sub-criterion pending; all else PASS).
-`ANDROID_HANDOVER_COMPLETED = TRUE`.
+All REQUIRED gates PASS with runtime evidence: B1 (VPS1 GO liveness/auth), **B2** (runit-managed
+tunnel, post-restart HTTP 200, queue=0/pending=0, correlated `GATE_REQUEST`, no duplicate), TLS
+(renewed + timer), B5-a canonical fail-closed + ledger, B5-b DENY, **B5-b ALLOW** (external
+authority; COMPLETED + witness + ledger), and evidence/manifest. OUT_OF_SCOPE: GPT Action,
+phone-local GO.
+
+`PHASE2_COMPLETED = TRUE`. `ANDROID_HANDOVER_COMPLETED = TRUE`.
