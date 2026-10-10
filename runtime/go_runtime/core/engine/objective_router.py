@@ -27,6 +27,8 @@ import os
 import re
 from typing import Any, Callable
 
+from .. import epistemics
+
 SCHEMA = "HG-OBJECTIVE-ROUTER-V1"
 DEFAULT_REF = os.getenv("HG_DEFAULT_REF", "hg-core")
 DEFAULT_REPO = os.getenv("HG_DEFAULT_REPO", "OAI-GIANG/GO")
@@ -403,8 +405,13 @@ def orchestrate(
         trace["result"] = results
         trace["terminal_reason"] = cls.get("class")
         return trace
-    trace["status"] = "COMPLETED"
-    trace["final"] = "SUCCESS"
+    trace["status"] = "ROUTED"
+    trace["final"] = "ROUTED"  # orchestration/completion != task success
     trace["result"] = results
     trace["result_sha256"] = _digest(results)
+    trace["epistemics"] = epistemics.envelope(
+        execution_state="COMPLETED",
+        truth_status=epistemics.TruthStatus.UNVERIFIED.value,
+        verification_status=epistemics.VerificationStatus.SELF_OBSERVED.value,
+    )
     return trace

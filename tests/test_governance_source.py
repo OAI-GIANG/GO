@@ -102,7 +102,13 @@ class GovernanceSourceBindingTests(unittest.TestCase):
             registry.register(CounterAdapter())
             ledger = Path(tmp) / "events.jsonl"
             governance = ToolGovernance(registry, ledger_path=ledger)
-            with patch.dict(os.environ, {"HG_TOOL_AUTHORITY_PROVENANCE": "TEST-PROV", "HG_TOOL_AUTHORITY_PROVENANCE_EXPECTED": "TEST-PROV", "HG_TOOL_AUTHORITY_SUBJECT": "HG_SESSION_TEST"}):
+            from runtime.go_runtime.core.authority import AuthorityRoot
+            subject = "HG_SESSION_TEST"
+            root = AuthorityRoot.instance()
+            token = root.issue(subject=subject, scope=["tool:test.v1.guard", "task:TASK-WITNESS"], action="execute", audience="tool:test.v1.guard", ttl_s=60)
+            token_path = Path(tmp) / "authority-token.json"
+            token_path.write_text(json.dumps(token.to_dict()), encoding="utf-8")
+            with patch.dict(os.environ, {"HG_TOOL_AUTHORITY_TOKEN_FILE": str(token_path), "HG_TOOL_AUTHORITY_SUBJECT": subject}):
                 result = governance.execute("TASK-WITNESS", "test.v1.guard", {}, call_id="CALL-WITNESS")
             self.assertTrue(result.ok)
             self.assertEqual(result.witness["governance_source_sha256"], PINNED_SOURCE_SHA256)

@@ -183,14 +183,26 @@ class Kernel:
             return GateResult.BLOCKED
         return GateResult.ALLOW
 
-    def verify_and_promote_evidence(self, evidence: Evidence, subject: str, scope: str) -> tuple[GateResult, Optional[Evidence]]:
-        """Verify canonical evidence and return a new VERIFIED record only on success."""
-        if self.verify_evidence(
-            Evidence(evidence.evidence_id, evidence.subject, evidence.scope, evidence.source,
-                     evidence.captured_at, evidence.provenance, evidence.integrity, "VERIFIED", evidence.claim, evidence.governance_source_sha256),
-            subject,
-            scope,
-        ) is not GateResult.ALLOW:
+    def verify_and_promote_evidence(self, evidence: Evidence, subject: str, scope: str, *, verification_result, evidence_payload: dict | None = None) -> tuple[GateResult, Optional[Evidence]]:
+        """Promote only when trusted IV&V result is bound to this exact evidence payload."""
+        import json
+        from hashlib import sha256
+        from runtime.go_runtime.core.ivv import VerificationResult, promotion_gate
+
+        if not isinstance(verification_result, VerificationResult) or not isinstance(evidence_payload, dict):
+            return GateResult.BLOCKED, None
+        if evidence.subject != subject or evidence.scope != scope:
+            return GateResult.DENY, None
+        payload_digest = "sha256:" + sha256(json.dumps(
+            {"claim": str(evidence_payload.get("claim") or ""), "evidence": evidence_payload},
+            sort_keys=True, default=str, separators=(",", ":")
+        ).encode()).hexdigest()
+        if verification_result.evidence_digest != payload_digest:
+            return GateResult.BLOCKED, None
+        gate = promotion_gate(verification_result)
+        if not gate["promotable"]:
+            return GateResult.BLOCKED, None
+        if evidence.integrity != evidence.expected_integrity():
             return GateResult.BLOCKED, None
         promoted = Evidence(
             evidence.evidence_id, evidence.subject, evidence.scope, evidence.source,
@@ -204,6 +216,10 @@ class Kernel:
         if len(claims) > 1:
             return GateResult.CONFLICT
         return GateResult.ALLOW if verified else GateResult.UNKNOWN
+
+    def unify_evidence(self, evidence_items: list[Evidence]) -> dict:
+        from runtime.go_runtime.core.evidence import from_kernel_evidence, unify
+        return unify([from_kernel_evidence(item) for item in evidence_items])
 
     def evaluate_unknown(self) -> GateResult:
         return GateResult.UNKNOWN
@@ -282,14 +298,11 @@ class Kernel:
         if na.get("deterministic") is not True: return block("NEXT_ACTION_NONDETERMINISTIC")
         seq=int(checkpoint.get("replay_sequence",0) or 0); digest=checkpoint.get("replay_digest","")
         if seq<1 or not digest: return block("REPLAY_INTEGRITY_INVALID")
-        previous="GENESIS"
+        from runtime.go_runtime.core.replay_contract import verify_replay_chain
         ordered=sorted(replay_records,key=lambda r:int(r.get("sequence",0)))
-        for i,r in enumerate(ordered,1):
-            if int(r.get("sequence",0))!=i or r.get("previous_digest")!=previous: return block("REPLAY_INTEGRITY_INVALID")
-            rp={"replay_id":r.get("replay_id"),"task_id":r.get("task_id"),"sequence":int(r.get("sequence")),"event_type":r.get("event_type"),"payload":r.get("payload",{}),"previous_digest":r.get("previous_digest"),"occurred_at":r.get("occurred_at")}
-            if sha256_canonical(rp)!=r.get("record_digest"): return block("REPLAY_INTEGRITY_INVALID")
-            previous=r.get("record_digest")
-        if seq>len(ordered) or previous!=digest: return block("REPLAY_INTEGRITY_INVALID")
+        if not verify_replay_chain(ordered): return block("REPLAY_INTEGRITY_INVALID")
+        previous=ordered[-1].get("record_digest") if ordered else "GENESIS"
+        if seq>len(ordered) or ordered[seq-1].get("record_digest")!=digest: return block("REPLAY_INTEGRITY_INVALID")
         matches=[r for r in ordered if r.get("event_type")=="CHECKPOINT_CREATED" and r.get("payload",{}).get("checkpoint_id")==cid]
         if not matches or matches[-1].get("payload",{}).get("checkpoint_hash")!=expected: return block("INTEGRITY_CONFLICT")
         if checkpoint.get("resume",{}).get("model_context_required") is True: return block("INTEGRITY_CONFLICT")
