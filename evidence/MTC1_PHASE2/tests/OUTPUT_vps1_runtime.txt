@@ -44,7 +44,14 @@ GET /edge/tunnel/status?device_id=phone-primary-u0_a460
 GET /h/phone-primary-u0_a460/api/health (Bearer) -> timeout (curl 000)
 GET /h/phone-primary-u0_a460/api/health (no token) -> HTTP 401
 journal (hg-edge): repeated GATE_TIMEOUT 504 (edge.py:174) + BrokenPipeError
-=> tunnel not draining; B2 FAIL (queue=3), B4 server-side 200 not achieved.
+=> tunnel not draining; B2 FAIL (queue grew 3 -> 4), B4 server-side 200 not achieved.
+
+== B4 gate (server-side, added 2026-10-10T10:46Z) ==
+GET /h/phone-primary-u0_a460/api/health  Authorization: Bearer <HG_GATE_TOKEN (64)> -> no response within 20s
+        (edge queues + waits for the tunnel, then logs GATE_TIMEOUT 504)
+GET same, no token      -> HTTP 401  {"ok":false,"error":{"code":"GATE_UNAUTHORIZED"}}
+GET same, wrong token   -> HTTP 401
+=> gate authentication enforced; dispatch blocked because the tunnel is not draining.
 
 == TLS / B4 certificate ==
 subjectAltName: IP Address:160.191.242.198 (critical)
