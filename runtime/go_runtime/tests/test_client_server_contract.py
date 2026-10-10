@@ -12,8 +12,10 @@ for f in ["/api/phone/register", "/api/phone/poll", "/api/phone/result"]:
     rec(f"doc_has_route{f}", f in doc)
     rec(f"server_mounts{f}", f in srv or f in router)
     rec(f"client_uses{f}", f in java)
-for fld in ["request_id", "capability", "params", "wait_s", "device_token", "idle", "result"]:
+for fld in ["request_id", "capability", "params", "wait_s", "idle", "result"]:
     rec(f"field_shared[{fld}]", f'"{fld}"' in java and fld in doc)
+# device_token: client dùng ở bước ĐĂNG KÝ (MainActivity), server trả về, doc mô tả
+rec("field_shared[device_token]", '"device_token"' in main and "device_token" in doc and "device_token" in (ROOT/"runtime/go_runtime/core/phone_agent_server_v2.py").read_text())
 rec("router_internal_key_required", "X-Internal-Key" in router and "INTERNAL_FORBIDDEN" in router)
 rec("statuses_documented", all(s in doc for s in ["403", "401", "400", "409"]))
 rec("client_https_only", 'startsWith("https://")' in java)
