@@ -24,8 +24,11 @@ rec("result_replay_rejected", code(lambda: s.submit_result(tok, {"request_id": e
 fr = s.fetch_result("d1", e["request_id"])
 rec("fetch_result_correlated", fr["state"] == "DONE" and fr["result"]["sha256"] == "sha256:aa")
 rec("poll_idle_on_empty", s.poll(tok, 0.1).get("idle") is True)
-time.sleep(2.2)
-rec("expired_token_rejected", code(lambda: s.poll(tok, 0)) == "TOKEN_EXPIRED")
+# TTL: dùng server riêng với biên rộng (1s TTL, chờ 2s = biên 2x) để tránh flaky
+s2 = PhoneAgentServer(pairing_tokens={"PAIR-OK"}, token_ttl_s=1)
+t2 = s2.register({"pairing_token": "PAIR-OK", "device_id": "d2"})["device_token"]
+time.sleep(2.0)
+rec("expired_token_rejected", code(lambda: s2.poll(t2, 0)) == "TOKEN_EXPIRED")
 rec("audit_chain_valid", s.verify_audit()["ok"] and s.verify_audit()["records"] >= 8)
 for n, d in P: print(f"  PASS | {n:36} | {d}")
 for n, d in F: print(f"  FAIL | {n:36} | {d}")
