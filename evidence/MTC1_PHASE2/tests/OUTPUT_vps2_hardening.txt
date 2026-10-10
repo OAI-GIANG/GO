@@ -1,0 +1,28 @@
+MTC-1.0 — VPS2 owner login + sshd hardening evidence — 2026-10-10T11:37Z
+
+== VPS2 owner Android login (VERIFIED) ==
+/var/log/auth.log on vps-5ku1ry:
+  2026-10-10T11:35:42.254783+00:00 vps-5ku1ry sshd[41537]: Accepted publickey for root
+     from 171.255.245.247 port 43106 ssh2: ED25519 SHA256:d9Tz+WxSL8FuCLp0y2tlq2fYiyUKhDhDVp6S1dKxOcU
+- Key = owner phone key (comment love-admin@localhost-20260928). Workstation holds no d9Tz key;
+  Deep reaches VPS2 only via the VPS1 jump (source 160.191.242.198). => login originated from the phone.
+
+== VPS2 sshd hardening (applied) ==
+BEFORE: permitrootlogin yes ; passwordauthentication yes ; kbdinteractiveauthentication no
+Applied drop-in (first-value-wins): /etc/ssh/sshd_config.d/00-hg-hardening.conf
+  PermitRootLogin prohibit-password
+  PasswordAuthentication no
+  KbdInteractiveAuthentication no
+sshd -t OK; systemctl reload ssh
+AFTER: permitrootlogin without-password ; pubkeyauthentication yes ;
+       passwordauthentication no ; kbdinteractiveauthentication no
+Fresh key login after change: KEYLOGIN_OK (vps-5ku1ry / root)
+Backups: /etc/ssh/sshd_config.bak-20261010T113658Z (+ 50-cloud-init.conf backup)
+Rollback: rm -f /etc/ssh/sshd_config.d/00-hg-hardening.conf && systemctl reload ssh
+Note: the ORIGINAL /root/OWNER_HARDEN_SSHD.sh edited the main config, which is INEFFECTIVE
+because Include /etc/ssh/sshd_config.d/*.conf is read first (50-cloud-init.conf had
+PasswordAuthentication yes). The helper was corrected to the 00- drop-in approach.
+
+== VPS1 ALLOW prerequisite (unchanged) ==
+/etc/hg/authority : absent (no root.key) -> B5-b ALLOW remains BLOCKED
+go-runtime: active ; B1/B2/TLS unchanged (no regression checked this run beyond the above)

@@ -1,0 +1,73 @@
+MTC-1.0 Phase 2 — VPS1 (canonical deployment host) runtime evidence — 2026-10-10T10:42Z
+Host: vps-hjcscw  Linux 6.8.0-31-generic x86_64   (root SSH; key love_admin_ed25519; no secret values printed)
+
+== B1: GO runtime identity / liveness / auth ==
+cmdline : /usr/bin/python3 -m runtime.go_runtime.core.server
+systemd : go-runtime ActiveState=active SubState=running MainPID=83645 (Restart=always RestartSec=2)
+env     : GO_HOST=127.0.0.1 GO_PORT=8877 GO_ENV=production
+          GO_COMMIT=d635e8830b7080572a61cfe999498911395a03d5
+          GO_TREE_SHA=00ba3fcd6a9184af6db094d04ba362ef29515c75
+listen  : 127.0.0.1:8877  python3 pid=83645
+GET http://127.0.0.1:8877/healthz
+        -> {"status": "ok", "version": "0.1.1"}
+GET /v1/status  (Authorization: Bearer <GO_API_TOKEN from /etc/go/go-runtime.env>)
+        -> HTTP 200
+        body: {"commit":"d635e883...","data_path":"/var/lib/go/go_runtime.sqlite3",
+               "environment":"production","host":"vps-hjcscw","integration":"GO_NATIVE_ENGINE",
+               "name":"GO","operations":[28 ops incl. vps1.edge.health, vps2.health, github.* ],...}
+GET /v1/status  (no token) -> HTTP 401
+=> B1 ACCEPTANCE MET on 127.0.0.1:8877 (liveness + authenticated status).
+
+== B5-b DENY: canonical ToolGovernance on /opt/go (real runtime) ==
+python3 (cwd /opt/go): ToolGovernance(registry.register(VPS1HealthTool())).execute(
+    "HG-TOOLPLANE", "vps1.edge.health", {}, call_id="CALL-MTC1-DENY-1")
+        -> {"ok": false,
+            "output": {"error": "AUTHORITY_PROVENANCE_MISSING"},
+            "witness": {"call_id":"CALL-MTC1-DENY-1","tool_name":"vps1.edge.health",
+                        "task_id":"HG-TOOLPLANE","status":"DENIED",
+                        "arguments_digest":"sha256:44136fa355b3678a...","contract_version":"TOOL-GOVERNANCE-V1"}}
+temp ledger events: ACCEPTED -> VALIDATED -> AUTHORIZATION_PENDING -> DENIED
+                    (reason=AUTHORITY_PROVENANCE_MISSING)
+
+Production canonical ledger /opt/go/data/tool-events.jsonl (lines=1733) latest include
+phone-toolplane calls, e.g. CALL-1791628830-0 vps1.edge.health:
+    ... AUTHORIZATION_PENDING @2026-10-10T10:40:30Z -> DENIED AUTHORITY_PROVENANCE_MISSING
+=> B5-b DENY PASS on the real canonical runtime.
+
+== edge (hg-edge.service; /opt/hg-edge/edge.py pid 42908; active 2 days) ==
+GET https://160.191.242.198/edge/health      -> 200 {"ok":true,"edge":"HG_EDGE","gate":true}
+GET /edge/status (Bearer)                    -> devices: phone-primary, laptop-edge-test,
+                                                phone-primary-u0_a460 (last_seen ~now)
+GET /edge/tunnel/status?device_id=phone-primary-u0_a460
+                                             -> {"ok":true,"device":"phone-primary-u0_a460",
+                                                 "queue":3,"pending":0}
+GET /h/phone-primary-u0_a460/api/health (Bearer) -> timeout (curl 000)
+GET /h/phone-primary-u0_a460/api/health (no token) -> HTTP 401
+journal (hg-edge): repeated GATE_TIMEOUT 504 (edge.py:174) + BrokenPipeError
+=> tunnel not draining; B2 FAIL (queue grew 3 -> 4), B4 server-side 200 not achieved.
+
+== B4 gate (server-side, added 2026-10-10T10:46Z) ==
+GET /h/phone-primary-u0_a460/api/health  Authorization: Bearer <HG_GATE_TOKEN (64)> -> no response within 20s
+        (edge queues + waits for the tunnel, then logs GATE_TIMEOUT 504)
+GET same, no token      -> HTTP 401  {"ok":false,"error":{"code":"GATE_UNAUTHORIZED"}}
+GET same, wrong token   -> HTTP 401
+=> gate authentication enforced; dispatch blocked because the tunnel is not draining.
+
+== TLS / B4 certificate ==
+subjectAltName: IP Address:160.191.242.198 (critical)
+issuer: C=US, O=Let's Encrypt, CN=YE1
+notBefore: Oct  6 09:54:11 2026 GMT ; notAfter: Oct 13 01:54:10 2026 GMT
+/etc/letsencrypt/live/160.191.242.198 present
+certbot NOT installed ; no renewal timer ; http->https 301 redirect present
+=> cert valid now, but NO automatic renewal (expiry 2026-10-13) -> renew via authority.
+
+== authority services ==
+hg-authority.service        active: "HG Execution Authority Executor" -> /opt/hg-authority/authority.py
+                            (GET /authority/health, POST /authority/op; path-jailed ops worker)
+hg-authority-tunnel.service active: ssh -N -L 127.0.0.1:9097:127.0.0.1:9098 root@36.50.135.233
+hg-ops.service              active: HG OPS Agent (control plane, :8888)
+/etc/hg/authority/          ABSENT  (no root.key)  ; /etc/hg contains only github.env
+=> B5-b ALLOW prerequisites (external authority root / trusted approval issuers) NOT provisioned.
+
+== VPS2 (36.50.135.233) ==
+not reachable from this workstation with available keys (publickey,password).

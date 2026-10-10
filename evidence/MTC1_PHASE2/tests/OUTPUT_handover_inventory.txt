@@ -1,0 +1,37 @@
+MTC-1.0 — Android handover inventory (raw) — 2026-10-10T11:31Z
+Workstation SSH: root@160.191.242.198 via love_admin_ed25519 (workstation fp xU04…)
+
+== VPS1 (vps-hjcscw) ==
+users: root uid=0; loveadmin uid=1000 (NOPASSWD sudo); nobody
+sshd: port 22; permitrootlogin without-password; passwordauthentication no; pubkey yes;
+      allowusers root loveadmin stt-exec
+root authorized_keys fingerprints:
+  SHA256:go2LJ…  love-admin@vps-000071
+  SHA256:9iiP…   love-production-20260929
+  SHA256:xU04…   dang quang vinh@LAPTOP-E9FGVI95   (workstation / Deep)
+  SHA256:d9Tz…   love-admin@localhost-20260928    (OWNER PHONE)
+loveadmin authorized_keys: go2LJ…, xU04…  (does not include phone key)
+root login records for owner key d9Tz… (5 total):
+  2026-10-09T23:00:13  Accepted publickey for root from 171.255.245.247 … SHA256:d9Tz…
+  2026-10-09T23:00:13  (2nd)
+  2026-10-09T23:43:48
+  2026-10-09T23:52:29
+  2026-10-10T00:11:53
+workstation .ssh keys: go2LJ, xU04, 9iiP, EOEJ, Z9Ht  (NONE equals d9Tz) => d9Tz logins not from workstation
+host keys present: ssh_host_dsa_key.pub (1024), ssh_host_rsa_key.pub (3072)  [no ed25519 host key]
+
+== VPS2 (vps-5ku1ry) — via VPS1 jump (hg_vps2_ed25519) ==
+hostname: vps-5ku1ry
+users: root uid=0; nobody
+sshd: port 22; permitrootlogin yes; passwordauthentication YES; pubkey yes   <-- hardening needed
+root authorized_keys fingerprints (after provisioning this run):
+  SHA256:+ADgN…  root@vps-hjcscw                 (VPS1 -> VPS2 tunnel key)
+  SHA256:d9Tz…   love-admin@localhost-20260928   (OWNER PHONE, ADDED this run)
+owner-key login records on VPS2: 0 (not yet logged in from the phone)
+recent VPS2 logins: Accepted publickey from 160.191.242.198 (VPS1 jump, Deep);
+                    earlier Accepted password for root from 171.255.245.247 (2026-10-10T00:07-00:09)
+/opt/hg-authority present; /opt/go absent; /etc/hg/authority absent (no authority root key)
+
+== Actions taken (this run) ==
+- Added OWNER phone key (d9Tz…) to VPS2 /root/.ssh/authorized_keys (backup created).
+- No credential revoked; password auth on VPS2 left enabled pending owner key verification.

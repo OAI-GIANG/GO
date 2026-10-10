@@ -211,7 +211,17 @@ class VPS2ExecutionBridge:
         decision = self.authorize(request)
         template = self.resolve(request.operation_id)
         execution_started_at = datetime.now(timezone.utc).isoformat()
-        result = dict(executor(template, dict(request.variables)))
+        from . import reconciliation
+        try:
+            result = dict(executor(template, dict(request.variables)))
+            ext_state = reconciliation.ExternalState.COMPLETED
+        except Exception as exc:
+            # FAILED if the request was never sent; UNKNOWN if it may have applied
+            # but the response was lost (never guessed SUCCESS, never blindly retried).
+            reason = type(getattr(exc, "reason", exc)).__name__
+            sent_ok = reason != "ConnectionRefusedError"
+            result = {}
+            ext_state = reconciliation.classify(sent_ok=sent_ok, authorized=True, response_received=False, side_effect_possible=sent_ok)
         evidence_emitted_at = datetime.now(timezone.utc).isoformat()
         closed_at = datetime.now(timezone.utc).isoformat()
         return {
@@ -226,7 +236,9 @@ class VPS2ExecutionBridge:
                 "policy_version": decision.policy_version,
                 "authorization_decision_id": decision.decision_id,
                 "readonly_attestation": template.read_only is True,
-                "execution_status": "COMPLETED",
+                "execution_status": "COMPLETED" if ext_state == reconciliation.ExternalState.COMPLETED else ext_state,
+                "external_state": ext_state,
+                "reconciliation_required": reconciliation.requires_reconciliation(ext_state),
                 "authorization_timestamp": decision.timestamp,
                 "execution_started_at": execution_started_at,
                 "evidence_emitted_at": evidence_emitted_at,

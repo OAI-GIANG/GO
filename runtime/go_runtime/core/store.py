@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
@@ -43,6 +43,7 @@ class RuntimeStore:
                     task_id TEXT PRIMARY KEY, operation TEXT NOT NULL,
                     state TEXT NOT NULL DEFAULT 'QUEUED',
                     status TEXT,
+                    task_outcome TEXT NOT NULL DEFAULT 'UNKNOWN',
                     request_json TEXT NOT NULL,
                     result_json TEXT, error TEXT,
                     idempotency_key TEXT UNIQUE,
@@ -109,9 +110,30 @@ class RuntimeStore:
                 CREATE INDEX IF NOT EXISTS idx_checkpoint_task_revision ON checkpoint_records(task_id,checkpoint_revision);
                 CREATE INDEX IF NOT EXISTS idx_checkpoint_task_created ON checkpoint_records(task_id,created_at);
             """)
+            # Migration preflight: fail closed before transforming ambiguous legacy state.
+            from .replay_contract import verify_replay_chain
+            replay_task_ids = [row[0] for row in conn.execute("SELECT DISTINCT task_id FROM replay_records").fetchall()]
+            for replay_task_id in replay_task_ids:
+                replay_rows = conn.execute("SELECT record_json FROM replay_records WHERE task_id=? ORDER BY sequence", (replay_task_id,)).fetchall()
+                replay_records = [json.loads(row[0]) for row in replay_rows]
+                if not verify_replay_chain(replay_records):
+                    raise ValueError("migration_stop_invalid_legacy_replay_chain:" + str(replay_task_id))
             cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+            if "status" in cols:
+                known_statuses = {"PENDING", "RUNNING", "SUCCEEDED", "FAILED", "COMPLETED", "SUCCESS", "FAILURE", "UNKNOWN", None, ""}
+                statuses = {row[0] for row in conn.execute("SELECT DISTINCT status FROM tasks").fetchall()}
+                unknown_statuses = statuses - known_statuses
+                if unknown_statuses:
+                    raise ValueError("migration_stop_unknown_legacy_status:" + ",".join(sorted(str(x) for x in unknown_statuses)))
+            for checkpoint_row in conn.execute("SELECT task_id,replay_sequence,replay_digest FROM checkpoint_records").fetchall():
+                sequence = int(checkpoint_row["replay_sequence"] or 0)
+                if sequence <= 0:
+                    continue
+                replay_row = conn.execute("SELECT record_json FROM replay_records WHERE task_id=? AND sequence=?", (checkpoint_row["task_id"], sequence)).fetchone()
+                if replay_row is None or json.loads(replay_row[0]).get("record_digest") != checkpoint_row["replay_digest"]:
+                    raise ValueError("migration_stop_checkpoint_replay_binding_mismatch:" + str(checkpoint_row["task_id"]))
             additions = {
-                "state": "TEXT", "idempotency_scope": "TEXT", "request_fingerprint": "TEXT",
+                "state": "TEXT", "task_outcome": "TEXT NOT NULL DEFAULT 'UNKNOWN'", "idempotency_scope": "TEXT", "request_fingerprint": "TEXT",
                 "execution_mode": "TEXT", "async": "INTEGER NOT NULL DEFAULT 0", "queue_eligibility": "TEXT",
                 "attempt_no": "INTEGER NOT NULL DEFAULT 0", "attempt": "INTEGER NOT NULL DEFAULT 0",
                 "run_id": "TEXT", "attempt_id": "TEXT", "parent_run_id": "TEXT", "worker_id": "TEXT",
@@ -124,8 +146,9 @@ class RuntimeStore:
                 if name not in cols:
                     conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {typ}")
             if "status" in cols:
-                conn.execute("UPDATE tasks SET state=CASE status WHEN 'SUCCEEDED' THEN 'COMPLETED' WHEN 'FAILED' THEN 'FAILED' WHEN 'RUNNING' THEN 'RUNNING' ELSE 'QUEUED' END WHERE state IS NULL")
-            conn.execute("UPDATE tasks SET state=COALESCE(state,'QUEUED'), execution_mode=COALESCE(execution_mode, CASE WHEN async=1 THEN 'ASYNC' ELSE 'SYNC' END), queue_eligibility=COALESCE(queue_eligibility,'DISPATCHABLE'), evidence_refs_json=COALESCE(evidence_refs_json,'[]'), provenance_json=COALESCE(provenance_json,'{}'), metadata_json=COALESCE(metadata_json,'{}')")
+                conn.execute("UPDATE tasks SET state=CASE status WHEN 'SUCCEEDED' THEN 'COMPLETED' WHEN 'FAILED' THEN 'FAILED' WHEN 'RUNNING' THEN 'RUNNING' WHEN 'COMPLETED' THEN 'COMPLETED' ELSE COALESCE(state,'QUEUED') END WHERE state IS NULL OR state=''")
+                conn.execute("UPDATE tasks SET task_outcome=CASE status WHEN 'SUCCEEDED' THEN 'SUCCESS' WHEN 'FAILED' THEN 'FAILURE' WHEN 'COMPLETED' THEN 'UNKNOWN' ELSE COALESCE(task_outcome,'UNKNOWN') END")
+            conn.execute("UPDATE tasks SET state=COALESCE(state,'QUEUED'), task_outcome=COALESCE(task_outcome,'UNKNOWN'), execution_mode=COALESCE(execution_mode, CASE WHEN async=1 THEN 'ASYNC' ELSE 'SYNC' END), queue_eligibility=COALESCE(queue_eligibility,'DISPATCHABLE'), evidence_refs_json=COALESCE(evidence_refs_json,'[]'), provenance_json=COALESCE(provenance_json,'{}'), metadata_json=COALESCE(metadata_json,'{}')")
             cp_cols={row[1] for row in conn.execute("PRAGMA table_info(checkpoint_records)").fetchall()}
             if "repository_json" not in cp_cols:
                 conn.execute("ALTER TABLE checkpoint_records ADD COLUMN repository_json TEXT NOT NULL DEFAULT '{}'")
@@ -156,9 +179,18 @@ class RuntimeStore:
         state = task.get("state", "QUEUED")
         operation = task.get("operation", "echo")
         request = task.get("request") or {"operation": operation, "payload": task.get("metadata", {}).get("payload", {})}
-        status = _STATE_TO_STATUS.get(state, "PENDING")
+        raw_outcome = task.get("task_outcome")
+        legacy_status = task.get("status")
+        if raw_outcome is None and legacy_status in {"COMPLETED", "SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "ABORTED_BY_KILL"}:
+            raise ValueError("invalid_task_outcome")
+        if raw_outcome is None and legacy_status in {"SUCCESS", "FAILURE", "UNKNOWN"}:
+            raw_outcome = legacy_status
+        task_outcome = str(raw_outcome or "UNKNOWN")
+        if task_outcome not in {"SUCCESS", "FAILURE", "UNKNOWN"}:
+            raise ValueError("invalid_task_outcome")
+        status = task_outcome
         values = (
-            task["id"], operation, state, status, json.dumps(request, sort_keys=True),
+            task["id"], operation, state, status, task_outcome, json.dumps(request, sort_keys=True),
             json.dumps(task.get("report"), sort_keys=True) if task.get("report") is not None else None,
             json.dumps(task.get("error"), sort_keys=True) if task.get("error") is not None else None,
             task.get("idempotency_key"), task.get("idempotency_scope"), task.get("request_fingerprint"),
@@ -170,14 +202,14 @@ class RuntimeStore:
             json.dumps(task.get("evidence_refs", []), sort_keys=True), json.dumps(task.get("provenance", {}), sort_keys=True),
             json.dumps(task.get("metadata", {}), sort_keys=True), task.get("created_at", now), now,
         )
-        sql = """INSERT INTO tasks(task_id,operation,state,status,request_json,result_json,error,idempotency_key,idempotency_scope,request_fingerprint,execution_mode,async,queue_eligibility,attempt_no,attempt,run_id,attempt_id,parent_run_id,worker_id,lease_id,lease_until,fence_token,revision,recovery_count,delay_s,last_heartbeat_at,timeout_deadline,recovery_reason,evidence_refs_json,provenance_json,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET operation=excluded.operation,state=excluded.state,status=excluded.status,request_json=excluded.request_json,result_json=excluded.result_json,error=excluded.error,idempotency_key=excluded.idempotency_key,idempotency_scope=excluded.idempotency_scope,request_fingerprint=excluded.request_fingerprint,execution_mode=excluded.execution_mode,async=excluded.async,queue_eligibility=excluded.queue_eligibility,attempt_no=excluded.attempt_no,attempt=excluded.attempt,run_id=excluded.run_id,attempt_id=excluded.attempt_id,parent_run_id=excluded.parent_run_id,worker_id=excluded.worker_id,lease_id=excluded.lease_id,lease_until=excluded.lease_until,fence_token=excluded.fence_token,revision=excluded.revision,recovery_count=excluded.recovery_count,delay_s=excluded.delay_s,last_heartbeat_at=excluded.last_heartbeat_at,timeout_deadline=excluded.timeout_deadline,recovery_reason=excluded.recovery_reason,evidence_refs_json=excluded.evidence_refs_json,provenance_json=excluded.provenance_json,metadata_json=excluded.metadata_json,updated_at=excluded.updated_at"""
+        sql = """INSERT INTO tasks(task_id,operation,state,status,task_outcome,request_json,result_json,error,idempotency_key,idempotency_scope,request_fingerprint,execution_mode,async,queue_eligibility,attempt_no,attempt,run_id,attempt_id,parent_run_id,worker_id,lease_id,lease_until,fence_token,revision,recovery_count,delay_s,last_heartbeat_at,timeout_deadline,recovery_reason,evidence_refs_json,provenance_json,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET operation=excluded.operation,state=excluded.state,status=excluded.status,task_outcome=excluded.task_outcome,request_json=excluded.request_json,result_json=excluded.result_json,error=excluded.error,idempotency_key=excluded.idempotency_key,idempotency_scope=excluded.idempotency_scope,request_fingerprint=excluded.request_fingerprint,execution_mode=excluded.execution_mode,async=excluded.async,queue_eligibility=excluded.queue_eligibility,attempt_no=excluded.attempt_no,attempt=excluded.attempt,run_id=excluded.run_id,attempt_id=excluded.attempt_id,parent_run_id=excluded.parent_run_id,worker_id=excluded.worker_id,lease_id=excluded.lease_id,lease_until=excluded.lease_until,fence_token=excluded.fence_token,revision=excluded.revision,recovery_count=excluded.recovery_count,delay_s=excluded.delay_s,last_heartbeat_at=excluded.last_heartbeat_at,timeout_deadline=excluded.timeout_deadline,recovery_reason=excluded.recovery_reason,evidence_refs_json=excluded.evidence_refs_json,provenance_json=excluded.provenance_json,metadata_json=excluded.metadata_json,updated_at=excluded.updated_at"""
         with self._lock, self._connection() as conn:
             conn.execute(sql, values); conn.commit()
 
     def create_task(self, task_id: str, operation: str, request: dict[str, Any], idempotency_key: str, now: str) -> dict[str, Any]:
         existing = self.get_by_idempotency(idempotency_key)
         if existing: return existing
-        task = {"id": task_id, "operation": operation, "state": "QUEUED", "execution_mode": "SYNC", "async": False,
+        task = {"id": task_id, "operation": operation, "state": "QUEUED", "task_outcome": "UNKNOWN", "execution_mode": "SYNC", "async": False,
                 "queue_eligibility": "DISPATCHABLE", "attempt_no": 0, "attempt": 0, "fence_token": 0, "revision": 1,
                 "idempotency_key": idempotency_key, "idempotency_scope": "TASK_SUBMISSION", "metadata": {"request": request},
                 "created_at": now, "updated_at": now}
@@ -189,10 +221,11 @@ class RuntimeStore:
         return None if row is None else self._row(row)
 
     def update_task(self, task_id: str, status: str, now: str, result: dict[str, Any] | None = None, error: str | None = None) -> None:
-        state = "COMPLETED" if status == "SUCCEEDED" else "FAILED" if status == "FAILED" else "RUNNING" if status == "RUNNING" else "QUEUED"
+        state = "COMPLETED" if status in {"SUCCEEDED", "COMPLETED"} else "FAILED" if status == "FAILED" else "RUNNING" if status == "RUNNING" else "QUEUED"
+        outcome = "SUCCESS" if status == "SUCCEEDED" else "FAILURE" if status == "FAILED" else "UNKNOWN"
         task = self.get_task(task_id)
         if task is None: raise KeyError(task_id)
-        task.update({"state": state, "report": result, "error": error, "updated_at": now})
+        task.update({"state": state, "task_outcome": outcome, "report": result, "error": error, "updated_at": now})
         self.upsert_task(task)
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
@@ -205,6 +238,16 @@ class RuntimeStore:
     def add_event(self, task_id: str | None, event_type: str, payload: dict[str, Any], now: str) -> None:
         with self._lock, self._connection() as conn:
             conn.execute("INSERT INTO audit_events(task_id,event_type,payload_json,occurred_at) VALUES(?,?,?,?)", (task_id,event_type,json.dumps(payload,sort_keys=True),now)); conn.commit()
+
+    def list_audit_events(self, task_id: str | None = None) -> list[dict[str, Any]]:
+        with self._connection() as conn:
+            rows = (conn.execute("SELECT event_id,task_id,event_type,payload_json,occurred_at FROM audit_events WHERE task_id=? ORDER BY event_id", (task_id,)).fetchall()
+                    if task_id else conn.execute("SELECT event_id,task_id,event_type,payload_json,occurred_at FROM audit_events ORDER BY event_id").fetchall())
+        return [{"event_id": row[0], "task_id": row[1], "event_type": row[2], "payload": json.loads(row[3]), "occurred_at": row[4]} for row in rows]
+
+    def unified_audit_evidence(self, task_id: str | None = None) -> dict[str, Any]:
+        from .evidence import from_ledger_event, unify
+        return unify([from_ledger_event(**event) for event in self.list_audit_events(task_id)])
 
     def save_memory(self, record: dict[str, Any], now: str) -> None:
         with self._lock, self._connection() as conn:
@@ -241,9 +284,55 @@ class RuntimeStore:
             rows=conn.execute("SELECT record_json FROM evidence_records WHERE task_id=? ORDER BY occurred_at",(task_id,)).fetchall() if task_id else conn.execute("SELECT record_json FROM evidence_records ORDER BY occurred_at").fetchall()
         return [json.loads(row[0]) for row in rows]
 
-    def save_replay(self, record: dict[str, Any], now: str) -> None:
+    def unified_evidence(self, task_id: str | None = None) -> dict[str, Any]:
+        from .evidence import from_store_record, unify
+        return unify([from_store_record(record) for record in self.list_evidence(task_id)])
+
+    def preview_replay(self, task_id: str, event_type: str, payload: dict[str, Any], *, now: str) -> dict[str, Any]:
+        """Build a candidate under the store lock; save methods revalidate under a write transaction."""
+        from .replay_contract import build_replay, verify_replay_chain
         with self._lock, self._connection() as conn:
-            conn.execute("INSERT OR REPLACE INTO replay_records(replay_id,task_id,sequence,record_json,occurred_at) VALUES(?,?,?,?,?)", (record["replay_id"],record["task_id"],record["sequence"],json.dumps(record,sort_keys=True),now)); conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute("SELECT record_json FROM replay_records WHERE task_id=? ORDER BY sequence", (task_id,)).fetchall()
+            records = [json.loads(row[0]) for row in rows]
+            if not verify_replay_chain(records):
+                raise ValueError("replay_legacy_chain_invalid_migration_stop")
+            previous = records[-1]["record_digest"] if records else "GENESIS"
+            return build_replay(task_id, len(records) + 1, event_type, payload, previous, now)
+
+    def append_replay(self, task_id: str, event_type: str, payload: dict[str, Any], *, now: str) -> dict[str, Any]:
+        from .replay_contract import build_replay, verify_replay_chain
+        with self._lock, self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute("SELECT record_json FROM replay_records WHERE task_id=? ORDER BY sequence", (task_id,)).fetchall()
+            records = [json.loads(row[0]) for row in rows]
+            if not verify_replay_chain(records):
+                raise ValueError("replay_legacy_chain_invalid_migration_stop")
+            previous = records[-1]["record_digest"] if records else "GENESIS"
+            record = build_replay(task_id, len(records) + 1, event_type, payload, previous, now)
+            conn.execute("INSERT INTO replay_records(replay_id,task_id,sequence,record_json,occurred_at) VALUES(?,?,?,?,?)",
+                         (record["replay_id"], task_id, record["sequence"], json.dumps(record, sort_keys=True), now))
+            conn.commit()
+            return record
+
+    def save_replay(self, record: dict[str, Any], now: str) -> None:
+        """Compatibility adapter; only exact next-sequence canonical records are accepted."""
+        from .replay_contract import verify_replay_chain
+        with self._lock, self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute("SELECT record_json FROM replay_records WHERE task_id=? ORDER BY sequence", (record["task_id"],)).fetchall()
+            existing = [json.loads(row[0]) for row in rows]
+            if not verify_replay_chain(existing):
+                raise ValueError("replay_legacy_chain_invalid_migration_stop")
+            expected_sequence = len(existing) + 1
+            expected_previous = existing[-1]["record_digest"] if existing else "GENESIS"
+            if int(record.get("sequence", 0)) != expected_sequence or record.get("previous_digest") != expected_previous:
+                raise ValueError("replay_sequence_conflict")
+            if not verify_replay_chain(existing + [record]):
+                raise ValueError("replay_digest_invalid")
+            conn.execute("INSERT INTO replay_records(replay_id,task_id,sequence,record_json,occurred_at) VALUES(?,?,?,?,?)",
+                         (record["replay_id"], record["task_id"], record["sequence"], json.dumps(record, sort_keys=True), now))
+            conn.commit()
 
     def list_replay(self, task_id: str) -> list[dict[str, Any]]:
         with self._connection() as conn:
@@ -257,10 +346,29 @@ class RuntimeStore:
 
     def save_checkpoint_with_replay(self, checkpoint: dict[str, Any], replay: dict[str, Any], now: str|None=None) -> None:
         now=now or checkpoint.get("created_at")
-        with self._lock,self._connection() as conn:
-            self._insert_checkpoint(conn,checkpoint,now)
+        from .replay_contract import verify_replay_chain
+        checkpoint_task_id = str(checkpoint.get("identity", {}).get("task_id", ""))
+        if checkpoint_task_id != str(replay.get("task_id", "")):
+            raise ValueError("checkpoint_replay_task_binding_mismatch")
+        if int(checkpoint.get("replay_sequence", 0) or 0) != int(replay.get("sequence", 0) or 0):
+            raise ValueError("checkpoint_replay_sequence_binding_mismatch")
+        if checkpoint.get("replay_digest") != replay.get("record_digest"):
+            raise ValueError("checkpoint_replay_digest_binding_mismatch")
+        with self._lock, self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute("SELECT record_json FROM replay_records WHERE task_id=? ORDER BY sequence", (replay["task_id"],)).fetchall()
+            existing = [json.loads(row[0]) for row in rows]
+            if not verify_replay_chain(existing):
+                raise ValueError("replay_legacy_chain_invalid_migration_stop")
+            expected_sequence = len(existing) + 1
+            expected_previous = existing[-1]["record_digest"] if existing else "GENESIS"
+            if int(replay.get("sequence", 0)) != expected_sequence or replay.get("previous_digest") != expected_previous:
+                raise ValueError("replay_sequence_conflict")
+            if not verify_replay_chain(existing + [replay]):
+                raise ValueError("replay_digest_invalid")
+            self._insert_checkpoint(conn, checkpoint, now)
             conn.execute("INSERT INTO replay_records(replay_id,task_id,sequence,record_json,occurred_at) VALUES(?,?,?,?,?)",
-                         (replay["replay_id"],replay["task_id"],replay["sequence"],json.dumps(replay,sort_keys=True),replay["occurred_at"]))
+                         (replay["replay_id"], replay["task_id"], replay["sequence"], json.dumps(replay, sort_keys=True), replay["occurred_at"]))
             conn.commit()
 
     @staticmethod
@@ -345,7 +453,8 @@ class RuntimeStore:
         result=dict(row)
         state=result.get("state") or "QUEUED"
         result["state"]=state
-        result["status"]=_STATE_TO_STATUS.get(state,"PENDING")
+        result["task_outcome"]=result.get("task_outcome") or "UNKNOWN"
+        result["status"]=result["task_outcome"]
         result["task_id"]=result.get("task_id")
         result["id"]=result.get("task_id")
         result["request"]=json.loads(result.pop("request_json"))

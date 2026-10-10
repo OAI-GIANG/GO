@@ -34,8 +34,17 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def request_fingerprint(message: str, delay_s: int) -> str:
-    raw = f"{message}\n{delay_s}".encode("utf-8")
+def request_fingerprint(message: str, delay_s: int, *, execution_mode: str = "ASYNC",
+                        idempotency_scope: str = "TASK_SUBMISSION", metadata: dict | None = None) -> str:
+    semantic_request = {
+        "schema": "GO_REQUEST_FINGERPRINT_V2",
+        "goal": str(message),
+        "delay_s": int(delay_s),
+        "execution_mode": str(execution_mode),
+        "idempotency_scope": str(idempotency_scope),
+        "metadata": metadata or {},
+    }
+    raw = json.dumps(semantic_request, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
 
@@ -113,7 +122,7 @@ class DurableExecution:
             raise DurableExecutionError("invalid_idempotency_scope")
         if not idempotency_key:
             raise DurableExecutionError("idempotency_key_required")
-        fingerprint = request_fingerprint(goal, delay_s)
+        fingerprint = request_fingerprint(goal, delay_s, execution_mode=execution_mode, idempotency_scope=idempotency_scope, metadata=dict(metadata or {}))
         with self.store.lock:
             rows = self.store.tasks()
             for row in rows:
@@ -221,7 +230,7 @@ class DurableExecution:
             return True
 
     def finalize(self, task_id: str, fence_token: int, state: str, *, report: dict | None = None,
-                 error: dict | None = None) -> dict:
+                 error: dict | None = None, outcome: str | None = None) -> dict:
         if state not in TERMINAL_STATES:
             raise DurableExecutionError("invalid_terminal_state")
         with self.store.lock:
@@ -232,7 +241,17 @@ class DurableExecution:
                 raise DurableExecutionError("stale_fence_token")
             if task.get("state") in TERMINAL_STATES:
                 return task
+            if outcome is None:
+                if state == "COMPLETED":
+                    outcome = str((report or {}).get("epistemics", {}).get("task_outcome", "UNKNOWN"))
+                elif state in {"FAILED", "CANCELLED", "TIMED_OUT", "ABORTED_BY_KILL"}:
+                    outcome = "FAILURE"
+                else:
+                    outcome = "UNKNOWN"
+            if outcome not in {"SUCCESS", "FAILURE", "UNKNOWN"}:
+                raise DurableExecutionError("invalid_task_outcome")
             task["state"] = state
+            task["task_outcome"] = outcome
             task["queue_eligibility"] = "TERMINAL"
             task["lease_until"] = None
             task["updated_at"] = now_iso()
@@ -245,18 +264,11 @@ class DurableExecution:
             return self.store.task_by_id(task_id) or dict(task)
 
     def emit_replay(self, task_id: str, event_type: str, payload: dict[str,Any], now: str|None=None)->dict[str,Any]:
-        now=now or now_iso(); records=self.store.list_replay(task_id); seq=len(records)+1; prev=records[-1]["record_digest"] if records else "GENESIS"
-        r={"replay_id":f"RPL-{uuid.uuid4().hex}","task_id":task_id,"sequence":seq,"event_type":event_type,"payload":payload,"previous_digest":prev,"occurred_at":now}
-        r["record_digest"]=sha256_canonical(r); self.store.save_replay(r,now); return r
+        return self.store.append_replay(task_id, event_type, payload, now=now or now_iso())
 
     def verify_replay(self, task_id: str)->bool:
-        prev="GENESIS"
-        for i,r in enumerate(self.store.list_replay(task_id),1):
-            if int(r.get("sequence",0))!=i or r.get("previous_digest")!=prev: return False
-            rp={"replay_id":r.get("replay_id"),"task_id":r.get("task_id"),"sequence":int(r.get("sequence")),"event_type":r.get("event_type"),"payload":r.get("payload",{}),"previous_digest":r.get("previous_digest"),"occurred_at":r.get("occurred_at")}
-            if sha256_canonical(rp)!=r.get("record_digest"): return False
-            prev=r.get("record_digest")
-        return True
+        from ..replay_contract import verify_replay_chain
+        return verify_replay_chain(self.store.list_replay(task_id))
 
     def create_checkpoint(self, task_id: str, *, repository: dict[str,Any], contract: Any, phase: str,
                           acceptance: dict[str,Any], evidence: list[dict[str,Any]], blockers: list[dict[str,Any]],
@@ -281,10 +293,9 @@ class DurableExecution:
         cp=Checkpoint(CheckpointIdentity(cid,task_id,rev),CheckpointSchema(),created_at,source_runtime,rw,ContractBinding(cn,cv,ch,"VALID"),
                       str(task.get("goal","")),str(task.get("operation","")),str(task.get("execution_mode","")),str(task.get("state","")),
                       int(task.get("revision",0)),int(task.get("attempt_no",0)),task.get("run_id"),task.get("attempt_id"),phase,ac,manifest,bl,na,rs)
-        h=cp.computed_hash(); records=self.store.list_replay(task_id); seq=len(records)+1; prev=records[-1]["record_digest"] if records else "GENESIS"
-        replay={"replay_id":f"RPL-{uuid.uuid4().hex}","task_id":task_id,"sequence":seq,"event_type":"CHECKPOINT_CREATED","payload":{"checkpoint_id":cid,"checkpoint_revision":rev,"checkpoint_hash":h},"previous_digest":prev,"occurred_at":created_at}
-        replay["record_digest"]=sha256_canonical(replay)
-        cp=Checkpoint(**{**cp.__dict__,"replay_sequence":seq,"replay_digest":replay["record_digest"],"canonical_payload_hash":h}).validated()
+        h=cp.computed_hash()
+        replay=self.store.preview_replay(task_id, "CHECKPOINT_CREATED", {"checkpoint_id":cid,"checkpoint_revision":rev,"checkpoint_hash":h}, now=created_at)
+        cp=Checkpoint(**{**cp.__dict__,"replay_sequence":replay["sequence"],"replay_digest":replay["record_digest"],"canonical_payload_hash":h}).validated()
         self.store.save_checkpoint_with_replay(cp.to_dict(),replay,created_at); return cp.to_dict()
 
     def load_checkpoint(self, task_id: str, checkpoint_id: str|None=None)->dict[str,Any]|None:

@@ -60,8 +60,11 @@ def test_gci_09(tmp_path):
     assert decision(s,r,cp).reason_code=="NEXT_ACTION_NONDETERMINISTIC"
 
 def test_gci_10(tmp_path):
-    s,e,c,r,cp=setup_case(tmp_path); row=s.list_replay("TASK-GCI")[0]; row["payload"]["checkpoint_hash"]="tampered"; s.save_replay(row,"2026-10-07T00:00:02+00:00")
-    assert decision(s,r,cp).reason_code=="REPLAY_INTEGRITY_INVALID"
+    s,e,c,r,cp=setup_case(tmp_path); row=s.list_replay("TASK-GCI")[0]; row["payload"]["checkpoint_hash"]="tampered"
+    import pytest
+    with pytest.raises(ValueError, match="replay_digest_invalid|replay_sequence_conflict"):
+        s.save_replay(row,"2026-10-07T00:00:02+00:00")
+    assert decision(s,r,cp).decision == "ALLOW"
 
 def test_gci_11(tmp_path):
     s,e,c,r,cp=setup_case(tmp_path); e.claim("TASK-GCI"); e.recover_orphans()

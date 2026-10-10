@@ -1,0 +1,45 @@
+MTC-1.0 Phase 2 — B2 + B4 runtime evidence (real device + edge) — 2026-10-10T11:11Z
+Targets: phone OPPO PKC110 (Termux u0_a460) ; VPS1 edge 160.191.242.198 (hg-edge.service)
+
+== Root cause (B2), fixed via the deployed artifact ==
+The running supervisor spawned:  python3 /sdcard/HG-GO-DEPLOY/health-tunnel.py   (NO --apply, NO env)
+health-tunnel.py is DRY-RUN by default and fail-closed without HG_EDGE_URL/DEVICE/TOKEN
+=> it printed DRY_RUN_OK and exited instantly => supervisor respawned every loop => the
+   tunnel never polled => edge `_gate` queued requests and returned GATE_TIMEOUT 504.
+Fix (deployed): replace /sdcard/HG-GO-DEPLOY/health-tunnel.py with a self-configuring,
+apply-by-default build (reads ~/.config/hg/edge.conf + edge_token as DATA; runs unless
+"--dry-run"). Backup kept on device: health-tunnel.py.bak-20261010T110939Z.
+Device sha256(patched) = 790de550ced4cb75a2445c4a07f6bca6e18f0dec579fbc4d0683fbfd675e6889
+Workstation replica test (VPS1, before deploy): drained edge queue 6 -> 0, served 6 x GATE_REQUEST 200.
+
+== B2 acceptance (runtime) ==
+phone process (4 samples / 30s, stable, single):
+  2773 10459 python3 /sdcard/HG-GO-DEPLOY/health-tunnel.py     (PPID 10459 = supervisor)
+edge /edge/tunnel/status?device_id=phone-primary-u0_a460 : {"ok":true,"queue":0,"pending":0}  (stable)
+=> exactly one tunnel process, no restart loop, queue = 0.  B2 = PASS (runtime).
+
+== B4 server-side (runtime) ==
+GET https://160.191.242.198/h/phone-primary-u0_a460/api/health   (Authorization: Bearer <HG_GATE_TOKEN>)
+   -> HTTP 200
+   body: {"ok": true, "runtime": "HG_TUNNEL_HEALTH", "transport": "edge-http-long-poll",
+          "device_id": "phone-primary-u0_a460", "host": "localhost", "python": "3.14.6",
+          "machine": "aarch64", "at": "2026-10-10T11:10:53Z",
+          "scope": "read-only health; no runtime proxy; no write path"}
+GET same, no token -> HTTP 401 {"ok":false,"error":{"code":"GATE_UNAUTHORIZED"}}
+Device-side evidence gained (phone): /sdcard/hg-tunnel-evidence.jsonl
+  {"at":"2026-10-10T11:10:53Z","event":"GATE_REQUEST","request_id":"r_60a28b53f57fef05",
+   "path":"/api/health","status":200,"bytes":272}
+=> authenticated request reached the device and returned the contract payload with device-side evidence.
+   Remaining B4 item: import the Action in the ChatGPT editor + domain allowlist (owner/UI).
+
+== B4 TLS renewal (runtime, on VPS1) ==
+Before: cert notAfter 2026-10-13T01:54:10Z ; certbot present at /opt/certbot/bin/certbot (5.8.0)
+Fix: added ACME webroot location to nginx port-80 (backup: hg-edge.bak-20261010T110157Z),
+     `certbot renew` succeeded.
+After : cert notAfter 2026-10-17T02:09:59Z ; https://160.191.242.198/edge/health -> 200
+Durability: systemd `certbot-renew.timer` enabled (twice daily, RandomizedDelaySec=3600,
+            Persistent=true); manual service run OK (idempotent).
+
+== Phone-local GO (separate; still FAIL) ==
+No `go_runtime.core.server` process on the phone; crash-loop. Not needed for B1 (go_health
+probes VPS1). Root cause: phone deploy lacks control/MASTER_GOVERNANCE_RULESET_V1.md.

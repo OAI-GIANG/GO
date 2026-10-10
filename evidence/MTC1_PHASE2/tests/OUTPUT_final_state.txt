@@ -1,0 +1,26 @@
+MTC-1.0 — final consolidated state — 2026-10-10T11:34Z (VPS1 vps-hjcscw + phone)
+
+== REQUIRED gates (runtime evidence) ==
+B1 VPS1 GO: service=active ; /healthz=200 ; /v1/status(auth)=200 ; /v1/status(no token)=401  => PASS
+B2 tunnel: edge tunnel status queue=0 pending=0 ; gate(auth)=200 ; phone tunnel pid 2773 stable => PASS
+TLS: cert notAfter=Oct 17 02:09:59 2026 GMT ; certbot-renew.timer=active                  => PASS
+B5-a canonical: previously shown (DENY AUTHORITY_PROVENANCE_MISSING + ledger DENIED)        => PASS
+B5-b DENY: previously shown (canonical DENY, production ledger)                             => PASS
+Evidence/manifest: MANIFEST.sha256 (verify_artifacts OK)                                    => PASS
+
+== REQUIRED blocker ==
+B5-b ALLOW: with the owner-provisioned env loaded, canonical ToolGovernance.issue() raises
+  AuthorityError: AUTHORITY_ROOT_NOT_EXTERNAL
+  /etc/hg/authority/root.key -> No such file or directory
+  => BLOCKED_EXTERNAL_AUTHORITY_PROVISIONING
+  owner action ready: /root/OWNER_PROVISION_AUTHORITY.sh (owner-run; creates the key + restarts go-runtime)
+
+== Mission B — Android handover ==
+VPS1: owner phone key (SHA256:d9Tz…) authorized on root; historical root logins with that key
+      on 2026-10-09 (23:00, 23:43, 23:52) and 2026-10-10T00:11 from 171.255.245.247 (shared NAT).
+      Workstation holds no d9Tz key => logins attributed to the phone.
+VPS2: owner phone key ADDED this run to /root/.ssh/authorized_keys (backup kept). No phone login yet.
+      VPS2 sshd: PermitRootLogin yes + PasswordAuthentication yes (owner hardening helper placed:
+      /root/OWNER_HARDEN_SSHD.sh; do not run until key login verified).
+Owner actions (Android): ssh -i ~/.ssh/love_admin_ed25519 root@160.191.242.198
+                         ssh -i ~/.ssh/love_admin_ed25519 root@36.50.135.233

@@ -99,9 +99,17 @@ class Checkpoint:
         if not self.next_action.instruction.strip() or self.next_action.deterministic is not True: raise ValueError("next_action_nondeterministic")
         refs=sorted((_primitive(x) for x in self.evidence.refs),key=lambda x:x["evidence_id"])
         if self.evidence.manifest_digest!=sha256_canonical(refs): raise ValueError("evidence_manifest_mismatch")
+        unified=unify_evidence_refs(self.evidence.refs)
+        if unified["duplicate_representations"]: raise ValueError("evidence_duplicate_representations")
+        if unified["conflicts"]: raise ValueError("evidence_conflict")
         return self
 
 def canonical_contract_hash(contract_payload:Any)->str: return sha256_canonical(contract_payload)
 def canonical_evidence_manifest(refs:Any)->tuple[list[dict[str,Any]],str]:
     p=sorted((_primitive(x) for x in refs),key=lambda x:x["evidence_id"]); return p,sha256_canonical(p)
+
+
+def unify_evidence_refs(refs: Any) -> dict[str, Any]:
+    from .evidence import from_checkpoint_ref, unify
+    return unify([from_checkpoint_ref(_primitive(ref)) for ref in refs])
 def canonical_checkpoint_payload(checkpoint:Checkpoint)->str: return canonical_json(checkpoint.payload_without_integrity())

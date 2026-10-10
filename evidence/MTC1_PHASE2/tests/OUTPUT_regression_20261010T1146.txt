@@ -1,0 +1,37 @@
+MTC-1.0 — regression check — 2026-10-10T11:46Z (VPS1 + phone)
+
+== B1 (VPS1 GO) — PASS ==
+go-runtime=active ; /healthz=200 ; /v1/status(auth)=200 ; /v1/status(no token)=401
+
+== B5-b DENY (fail-closed) — PASS ==
+ToolGovernance with authority env unset -> {"error": "AUTHORITY_PROVENANCE_MISSING"} (DENIED)
+
+== TLS — PASS ==
+cert notAfter=Oct 17 02:09:59 2026 GMT ; certbot-renew.timer=active
+
+== B2 (tunnel) — FAIL (REGRESSION) ==
+- Phone: runit restarted (new runsvdir pid 30273; services cloudflared/sshd/ssh-agent/
+  hg-backend/go-runtime/og-runtime/hg-runtime). The tunnel SUPERVISOR (previously manual nohup,
+  pid 10459) is GONE and is NOT a managed service -> no `health-tunnel.py` process.
+- Edge: /edge/tunnel/status -> {"ok":true,"queue":1,"pending":1}; gate(auth) -> HTTP 000 (timeout).
+- Last successful tunnel serve: /sdcard/hg-tunnel-evidence.jsonl entry at 2026-10-10T11:32:53Z.
+- Root cause: the supervisor was started manually (nohup), not via termux-services/runit, so it
+  did not survive the Termux/runit restart. The patched tunnel file itself is intact
+  (/sdcard/HG-GO-DEPLOY/health-tunnel.py, 6290 bytes).
+
+== Phone access ==
+sshd:8022 refused (down); `adb` read/write also cannot start Termux processes (RUN_COMMAND denied).
+=> restoring B2 requires an owner Termux action (below).
+
+== Owner actions (Termux) ==
+# 1) restart the supervisor now (spawns the patched tunnel):
+nohup bash "/sdcard/Phần Mềm HG/toolplane/health-tunnel-supervisor.sh" >> "$HOME/health-tunnel.log" 2>&1 &
+# 2) durability (recommended): make it a runit service so it survives restarts
+mkdir -p "$PREFIX/var/service/hg-health-tunnel"
+printf '#!/data/data/com.termux/files/usr/bin/sh\nexec bash "/sdcard/Phần Mềm HG/toolplane/health-tunnel-supervisor.sh"\n' \
+  > "$PREFIX/var/service/hg-health-tunnel/run"
+chmod +x "$PREFIX/var/service/hg-health-tunnel/run"
+sv-enable hg-health-tunnel
+
+Verification after the owner runs it: edge queue -> 0; gate(auth) -> 200;
+/sdcard/hg-tunnel-evidence.jsonl gains a new GATE_REQUEST status:200.

@@ -1,0 +1,49 @@
+--- a/runtime/go_runtime/toolplane/hg_tool_plane.py
++++ b/runtime/go_runtime/toolplane/hg_tool_plane.py
+@@ -255,16 +255,41 @@
+     except Exception:
+         return {"available": False, "mapped": True, "ok": None, "error": (r.get("stderr") or "rpc/parse fail")[:120]}
+ 
++def is_read_only(tool, args):
++    """A tool is read-only if it is declared read-only, or it is github_api with GET."""
++    if tool in READ_ONLY:
++        return True
++    if tool == "github_api" and str((args or {}).get("method", "GET")).upper() == "GET":
++        return True
++    return False
++
+ def governance_decide(tool, args, call_id):
+-    """Trả (allow: bool, lý do: str, quyết định canonical). Chính sách: fail-closed cho thao tác ghi."""
++    """Fail-closed decision (MTC-1.0 B5-a).
++
++    - Read-only tools may run even when canonical governance is unavailable
++      (they cannot produce a side effect).
++    - EVERY tool with a possible side effect (not read-only) MUST be:
++        * canonically MAPPED  (else DENY: UNMAPPED_FAIL_CLOSED), AND
++        * canonical AVAILABLE (else DENY), AND
++        * canonically ALLOWING (else DENY).
++    This closes the gap where an unmapped side-effect tool (vps_exec, github_api
++    writes) was previously allowed while only a local deny-list applied.
++    """
++    ro = is_read_only(tool, args)
+     dec = canonical_decision(tool, args, call_id)
+-    ro = tool in READ_ONLY or (tool == "github_api" and str(args.get("method", "GET")).upper() == "GET")
+     if not (isinstance(dec, dict) and "mapped" in dec and "available" in dec):
+         dec = {"available": False, "mapped": True, "ok": None, "error": "INVALID_CANONICAL_RESPONSE"}
+-    if dec.get("mapped") and dec.get("ok") is False and not ro:
+-        return False, "CANONICAL_GOVERNANCE_DENY: " + str(dec.get("denied") or dec.get("error") or dec.get("witness")), dec
+-    if dec.get("mapped") and not dec.get("available") and not ro:
++    if ro:
++        return True, "read-only", dec
++    if not dec.get("mapped"):
++        return (False,
++                "CANONICAL_GOVERNANCE_UNMAPPED_FAIL_CLOSED: " + str(tool) +
++                " has side effects but no canonical adapter mapping", dec)
++    if not dec.get("available"):
+         return False, "CANONICAL_GOVERNANCE_UNAVAILABLE (fail-closed)", dec
++    if dec.get("ok") is False:
++        return False, "CANONICAL_GOVERNANCE_DENY: " + str(
++            dec.get("denied") or dec.get("error") or dec.get("witness")), dec
+     return True, "ok", dec
+ 
+ TOOL_SCHEMAS = [t["schema"] for t in TOOLS.values()]

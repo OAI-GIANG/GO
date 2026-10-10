@@ -18,6 +18,7 @@ from .cognitive import CognitiveService
 from .tool_runtime import default_tool_registry
 from .tool_governance import ToolGovernance, ToolGovernanceError
 from .governance_source import verify_governance_source
+from runtime import go_kernel
 from runtime.go_kernel import GateResult
 
 VERSION = "0.1.1"
@@ -46,6 +47,7 @@ class GOApplication:
         self.store=RuntimeStore(config.data_path)
         self.durable=DurableExecution(self.store)
         self.cognitive=CognitiveService(self.store,config.commit,config.tree,config.environment)
+        self.kernel=go_kernel.Kernel()
         self.tools=default_tool_registry()
         self.durable.recover_orphans()
         self.store.set_meta("version",VERSION); self.store.set_meta("commit",config.commit); self.store.set_meta("tree",config.tree); self.store.set_meta("started_at",utc_now())
@@ -114,7 +116,7 @@ class GOApplication:
                 raw = exc.read().decode("utf-8", errors="replace")
                 raise RuntimeError(f"VPS2_HTTP_{exc.code}:{raw[:500]}") from exc
         result = bridge.execute(req, executor)
-        result["vps2_target_id"] = target
+        result["vps2_target_id"] = req.target_id or os.getenv("HG_VPS2_TARGET_ID", "")
         return result
 
     def _operations(self)->list[str]:
@@ -134,19 +136,34 @@ class GOApplication:
         if context: model_payload["go_context"]=context
         output=self.cognitive.invoke_model(task_id,operation,model_payload)
         evidence=self.cognitive.emit_evidence(task_id,"MODEL_EXECUTION","model execution completed")
-        candidate = __import__("runtime.go_kernel", fromlist=["Evidence"]).Evidence(
-            evidence["evidence_id"], task_id, "runtime", evidence["source"],
-            datetime.fromisoformat(evidence["captured_at"]), evidence["provenance"],
-            evidence["integrity"], evidence["verification_status"], evidence["claim"], evidence.get("governance_source_sha256", "")
+
+        from . import ivv, epistemics
+        verification = ivv.verify_evidence(
+            claim=str(evidence.get("claim") or ""), evidence=evidence, producer_id="go_runtime.runtime",
+            producer_authority_domain="runtime", producer_failure_domain="runtime",
+            verifier=ivv.get_trusted_verifier(),
         )
-        verification, promoted = self.cognitive.kernel.verify_and_promote_evidence(candidate, task_id, "runtime")
-        if verification is not GateResult.ALLOW or promoted is None:
-            raise RuntimeError("execution evidence did not satisfy verification gate")
-        evidence["verification_status"] = promoted.verification_status
-        self.store.save_evidence(evidence, evidence["captured_at"])
+        evidence_obj = go_kernel.Evidence(
+            str(evidence["evidence_id"]), task_id, "runtime", str(evidence["source"]),
+            datetime.fromisoformat(evidence["captured_at"]), str(evidence.get("provenance") or ""),
+            str(evidence["integrity"]), "UNVERIFIED", str(evidence.get("claim") or ""),
+            str(evidence.get("governance_source_sha256") or ""),
+        )
+        promotion_status, promoted = self.kernel.verify_and_promote_evidence(
+            evidence_obj, task_id, "runtime", verification_result=verification, evidence_payload=evidence
+        )
+        if promotion_status is go_kernel.GateResult.ALLOW and promoted is not None:
+            evidence["verification_status"] = promoted.verification_status
+            evidence["truth_status"] = verification.truth_status
+            self.store.save_evidence(evidence, evidence["captured_at"])
+        else:
+            evidence["verification_status"] = "UNVERIFIED"
+            evidence["truth_status"] = "UNVERIFIED"
+            self.store.save_evidence(evidence, evidence["captured_at"])
         replay=self.cognitive.emit_replay(task_id,"MODEL_EXECUTION",{"operation":operation,"output":output,"evidence_id":evidence["evidence_id"]})
         memory=self.cognitive.observe_memory(task_id,payload,evidence["evidence_id"])
-        result={**output,"task_id":task_id,"cognitive":{"advice":advice.recommendation,"memory_ids":list(advice.memory_ids),"evidence_ids":list(advice.evidence_ids),"context_used":bool(context),"go_context":context},"evidence_id":evidence["evidence_id"],"replay_id":replay["replay_id"]}
+        result={**output,"task_id":task_id,"cognitive":{"advice":advice.recommendation,"memory_ids":list(advice.memory_ids),"evidence_ids":list(advice.evidence_ids),"context_used":bool(context),"go_context":context},"evidence_id":evidence["evidence_id"],"replay_id":replay["replay_id"],
+                "epistemics":epistemics.envelope(execution_state="COMPLETED", truth_status=verification.truth_status, verification_status=verification.verification_status)}
         if memory: result.update({"memory_id":memory["memory_id"],"memory_key":memory["normalized_key"],"memory_scope":memory["scope"]})
         learning_artifact=self.cognitive.build_learning_artifact(task_id,result)
         result["learning_artifact_id"]=learning_artifact["artifact_id"]
@@ -154,7 +171,28 @@ class GOApplication:
 
     TOOL_OPS = {"github.read_repo", "github.read_branch", "github.read_file", "github.read_releases"}
 
-    def execute_tool(self, task_id: str, operation: str, payload: dict[str, Any], approval: str = "not_required") -> dict[str, Any]:
+    @staticmethod
+    def _deserialize_approval(raw: Any) -> Any:
+        """Transport deserialization for the HTTP submission path.
+
+        Never coerces an approval object to a string. Returns the sentinel
+        "not_required" or a strictly validated ``ApprovalEvidence`` object; raises
+        ValueError on any malformed payload (callers map this to HTTP 400, so
+        nothing is executed). Cryptographic/binding verification happens later in
+        ToolGovernance via the trusted issuer.
+        """
+        from .approval import ApprovalEvidence
+        if raw is None:
+            return "not_required"
+        if isinstance(raw, str):
+            if raw.strip() in ("", "not_required"):
+                return "not_required"
+            raise ValueError("approval must be a JSON object (a string is not approval evidence)")
+        if isinstance(raw, dict):
+            return ApprovalEvidence.from_json(raw)
+        raise ValueError("approval must be a JSON object or 'not_required'")
+
+    def execute_tool(self, task_id: str, operation: str, payload: dict[str, Any], approval: Any = "not_required") -> dict[str, Any]:
         verify_governance_source()
         governance = ToolGovernance(self.tools)
         result = governance.execute(task_id, operation, dict(payload), approval)
@@ -166,7 +204,7 @@ class GOApplication:
                              utc_now())
         return report
 
-    def run_objective(self, task_id: str, payload: dict[str, Any], approval: str = "not_required") -> dict[str, Any]:
+    def run_objective(self, task_id: str, payload: dict[str, Any], approval: Any = "not_required") -> dict[str, Any]:
         """OBJECTIVE -> discovery -> bounded selection -> governed execution -> failure policy."""
         verify_governance_source()
         from .engine import objective_router as orx
@@ -200,6 +238,7 @@ class GOApplication:
         if not operation: raise ValueError("operation is required")
         if not isinstance(payload,dict): raise ValueError("payload must be an object")
         if len(idem)>200: raise ValueError("idempotency_key too long")
+        approval=self._deserialize_approval(body.get("approval"))  # strict, before any task side effect
         contract=TaskContract(goal=operation,metadata={"operation":operation,"payload":payload}).validate()
         submission=contract.submit(submission_id=task_id,idempotency_key=idem,execution_mode="SYNC")
         task,reused=self.durable.enqueue_submission(submission)
@@ -211,7 +250,6 @@ class GOApplication:
         operation=str(metadata.get("operation") or operation); payload=dict(metadata.get("payload") or payload)
         try:
             tool_names=set(self.tools._tools)
-            approval=str(body.get("approval") or "not_required")
             if operation=="objective.run":
                 result=self.run_objective(task_id,payload,approval=approval)
             elif operation in tool_names:
