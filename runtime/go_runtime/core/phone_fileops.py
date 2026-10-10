@@ -2,7 +2,7 @@
 Bất biến: (1) mọi path qua _safe_path (canonicalize + containment); (2) allowlist extension;
 (3) KHÔNG arbitrary shell — RUN_TEST chỉ chạy entry trong ALLOWED_TESTS; (4) mọi ghi có sha256 + audit."""
 from __future__ import annotations
-import base64, difflib, hashlib, os, pathlib, re, subprocess, time, uuid
+import base64, difflib, fcntl, hashlib, json, os, pathlib, re, subprocess, time, uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -39,6 +39,94 @@ def safe_path(sandbox: pathlib.Path, rel: str, *, must_exist: bool = False) -> p
     if must_exist and not p.is_file():
         raise FileOpError("NOT_FOUND")
     return p
+
+
+
+
+class ReplayError(FileOpError):
+    pass
+
+
+class ReplayGuard:
+    """Bền vững xuyên tiến trình: append-only + hash-chain + flock.
+    Giao thức: reserve(INFLIGHT) → thực thi → finalize(DONE|FAILED); replay mọi trạng thái đều bị TỪ CHỐI.
+    Log hỏng/tamper ⇒ fail-closed (REPLAY_LOG_CORRUPT)."""
+
+    def __init__(self, path: pathlib.Path):
+        self.path = pathlib.Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _records(self):
+        """Trả (recs, bad, hashes). Hash được tính TRƯỚC khi thêm _line (khớp lúc ghi)."""
+        recs, bad, hashes = [], [], []
+        if not self.path.exists():
+            return recs, bad, hashes
+        for i, line in enumerate(self.path.read_text(errors="replace").splitlines(), 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+                h = r.pop("h", None)
+                calc = hashlib.sha256(json_dumps(r).encode()).hexdigest()
+                prev = r.get("prev")
+                if calc != h:
+                    bad.append({"line": i, "reason": "hash"})
+                if not hashes and prev != "GENESIS":
+                    bad.append({"line": i, "reason": "genesis"})
+                if hashes and prev != hashes[-1]:
+                    bad.append({"line": i, "reason": "chain"})
+                hashes.append(h)
+                r["_line"] = i
+                recs.append(r)
+            except Exception:
+                bad.append({"line": i, "reason": "parse"})
+        return recs, bad, hashes
+
+    def _append_locked(self, f, rec: dict, hashes: list) -> None:
+        rec["prev"] = hashes[-1] if hashes else "GENESIS"
+        rec["h"] = hashlib.sha256(json_dumps(rec).encode()).hexdigest()
+        f.write(json_dumps(rec) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+    def _lock(self):
+        f = open(self.path, "a+", encoding="utf-8")
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        return f
+
+    def status(self, rid: str):
+        recs, bad, _ = self._records()
+        if bad:
+            raise ReplayError("REPLAY_LOG_CORRUPT")
+        for r in reversed(recs):
+            if r.get("request_id") == rid:
+                return r.get("state")
+        return None
+
+    def reserve(self, rid: str, capability: str) -> None:
+        """Kiểm tra trùng + ghi INFLIGHT trong MỘT vùng khoá (chống đua giữa các tiến trình)."""
+        with self._lock() as f:
+            recs, bad, hashes = self._records()
+            if bad:
+                raise ReplayError("REPLAY_LOG_CORRUPT")
+            for r in recs:
+                if r.get("request_id") == rid:
+                    raise ReplayError("REPLAY_REJECTED")
+            self._append_locked(f, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                    "request_id": rid, "capability": capability, "state": "INFLIGHT"}, hashes)
+
+    def finalize(self, rid: str, state: str, detail: dict | None = None) -> None:
+        with self._lock() as f:
+            recs, bad, hashes = self._records()
+            if bad:
+                return                      # không phá log hỏng; giữ fail-closed ở lần reserve sau
+            self._append_locked(f, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                    "request_id": rid, "state": state, "detail": detail or {}}, hashes)
+
+    def verify(self) -> dict:
+        recs, bad, _ = self._records()
+        return {"ok": not bad, "records": len(recs), "bad": bad[:5]}
 
 
 @dataclass
@@ -127,27 +215,37 @@ class PhoneFileOps:
         self._emit("RUN_TEST", test=name, exit=cp.returncode)
         return {"test": name, "exit": cp.returncode, "stdout": cp.stdout[:2000], "stderr": cp.stderr[:1000]}
 
-    # ---- dispatcher (correlation + idempotency + validation) ----
+    # ---- dispatcher (correlation + replay bền vững + validation) ----
+    def _guard(self) -> ReplayGuard:
+        return ReplayGuard(pathlib.Path(self.sandbox) / ".hg_replay.jsonl")
+
     def handle(self, req: dict) -> dict:
         rid = str(req.get("request_id") or "")
         cap = str(req.get("capability") or "")
         if not rid: return {"ok": False, "error": {"code": "MISSING_REQUEST_ID"}}
-        if rid in self._seen: return {"ok": False, "request_id": rid, "error": {"code": "REPLAY_REJECTED"}}
         if cap not in CAPABILITIES:
             self._emit("DENIED", capability=cap or None, reason="UNKNOWN_CAPABILITY", request_id=rid)
             return {"ok": False, "request_id": rid, "error": {"code": "UNKNOWN_CAPABILITY"}}
-        self._seen[rid] = cap
+        g = self._guard()
+        try:
+            g.reserve(rid, cap)                      # INFLIGHT trước khi thực thi (an toàn đua)
+        except ReplayError as e:
+            self._emit("DENIED", capability=cap, reason=e.code, request_id=rid)
+            return {"ok": False, "request_id": rid, "capability": cap, "error": {"code": e.code}}
         try:
             if cap == "READ_FILE":        r = self.read_file(req["path"])
             elif cap == "WRITE_FILE":     r = self.write_file(req["path"], req["content_b64"], req.get("expect_sha256"))
             elif cap == "APPLY_PATCH":    r = self.apply_patch(req["path"], req["patch"])
             elif cap == "GET_DIFF":       r = self.get_diff(req["path"], req["content_b64"])
             else:                          r = self.run_test(req["test"])
+            g.finalize(rid, "DONE", {"capability": cap})
             return {"ok": True, "request_id": rid, "capability": cap, "result": r}
         except FileOpError as e:
+            g.finalize(rid, "FAILED", {"code": e.code})
             self._emit("DENIED", capability=cap, reason=e.code, request_id=rid)
             return {"ok": False, "request_id": rid, "capability": cap, "error": {"code": e.code}}
         except KeyError as e:
+            g.finalize(rid, "FAILED", {"code": "MISSING_FIELD"})
             return {"ok": False, "request_id": rid, "error": {"code": "MISSING_FIELD", "field": str(e)}}
 
 
