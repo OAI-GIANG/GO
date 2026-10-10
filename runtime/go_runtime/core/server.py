@@ -255,6 +255,12 @@ class Handler(BaseHTTPRequestHandler):
             task=self.app.store.get_task(self.path.rsplit("/",1)[-1]); self._json(HTTPStatus.NOT_FOUND if task is None else HTTPStatus.OK,{"error":"task not found"} if task is None else task); return
         self._json(HTTPStatus.NOT_FOUND,{"error":"not found"})
     def do_POST(self)->None:
+        # Phone Agent v2: register/poll/result (+ enqueue nội bộ, yêu cầu X-Internal-Key)
+        if self.path.startswith("/api/phone/") or self.path == "/internal/phone/enqueue":
+            n=int(self.headers.get("Content-Length") or 0)
+            body=self.rfile.read(n) if n>0 else b""
+            status,payload=_phone_agent().handle("POST", self.path, dict(self.headers), body)
+            self._json(status, payload); return
         try:
             verify_governance_source()
         except Exception as exc:
@@ -295,3 +301,20 @@ def main()->int:
     return 0
 
 if __name__=="__main__": raise SystemExit(main())
+
+# ---------- Phone Agent v2 (LONGPOLL_HTTPS_V2) — nối vào server thật ----------
+_PHONE_AGENT = None
+
+
+def _phone_agent():
+    """Khởi tạo lười; token/key lấy từ ENV (KHÔNG hard-code secret)."""
+    global _PHONE_AGENT
+    if _PHONE_AGENT is None:
+        import os
+        from .phone_agent_server_v2 import PhoneAgentServer
+        from .phone_agent_http import PhoneAgentHTTP
+        tokens = {x for x in os.getenv("HG_PHONE_PAIRING_TOKENS", "").split(",") if x}
+        _PHONE_AGENT = PhoneAgentHTTP(PhoneAgentServer(pairing_tokens=tokens),
+                                      os.getenv("HG_PHONE_INTERNAL_KEY", ""))
+    return _PHONE_AGENT
+
