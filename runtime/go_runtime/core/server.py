@@ -256,11 +256,19 @@ class Handler(BaseHTTPRequestHandler):
         self._json(HTTPStatus.NOT_FOUND,{"error":"not found"})
     def do_POST(self)->None:
         # Phone Agent v2: register/poll/result (+ enqueue nội bộ, yêu cầu X-Internal-Key)
-        if self.path.startswith("/api/phone/") or self.path == "/internal/phone/enqueue":
-            n=int(self.headers.get("Content-Length") or 0)
-            body=self.rfile.read(n) if n>0 else b""
-            status,payload=_phone_agent().handle("POST", self.path, dict(self.headers), body)
-            self._json(status, payload); return
+        if self.path.startswith("/api/phone/") or self.path in {"/internal/phone/enqueue", "/internal/phone/result"}:
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": {"code": "INVALID_CONTENT_LENGTH"}})
+                return
+            if n < 0 or n > 2 * 1024 * 1024:
+                self._json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"ok": False, "error": {"code": "BODY_TOO_LARGE"}})
+                return
+            body = self.rfile.read(n) if n > 0 else b""
+            status, payload = _phone_agent().handle("POST", self.path, dict(self.headers), body)
+            self._json(status, payload)
+            return
         try:
             verify_governance_source()
         except Exception as exc:
@@ -300,8 +308,6 @@ def main()->int:
     finally: server.server_close()
     return 0
 
-if __name__=="__main__": raise SystemExit(main())
-
 # ---------- Phone Agent v2 (LONGPOLL_HTTPS_V2) — nối vào server thật ----------
 _PHONE_AGENT = None
 
@@ -318,3 +324,5 @@ def _phone_agent():
                                       os.getenv("HG_PHONE_INTERNAL_KEY", ""))
     return _PHONE_AGENT
 
+if __name__ == "__main__":
+    raise SystemExit(main())

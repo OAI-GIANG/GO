@@ -67,9 +67,9 @@ public class MainActivity extends Activity {
     // ---- LONGPOLL_HTTPS_V2: thay hoàn toàn luồng WSS của V1 ----
     LongPollClient poller;
     void startLongPoll(final String base, final String token){
-        poller = new LongPollClient(base, token, (capability, params) -> {
+        poller = new LongPollClient(base, token, (requestId, capability, params) -> {
             JSONObject req = new JSONObject();
-            req.put("request_id", params.optString("request_id", ""));
+            req.put("request_id", requestId);
             req.put("capability", capability);
             req.put("params", params);
             JSONObject r = TermuxDispatch.dispatch(this, req, 60000L);

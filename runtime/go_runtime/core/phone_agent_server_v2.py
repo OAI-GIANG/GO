@@ -9,7 +9,7 @@ import base64, hashlib, hmac, json, secrets, threading, time
 from dataclasses import dataclass, field
 from typing import Any
 
-ALLOW_CAPS = {"READ_FILE", "WRITE_FILE", "APPLY_PATCH", "GET_DIFF", "RUN_TEST"}
+ALLOW_CAPS = {"LIST_FILES", "READ_FILE", "WRITE_FILE", "APPLY_PATCH", "GET_DIFF", "RUN_TEST"}
 TERMINAL = {"DONE", "FAILED"}
 
 
@@ -27,6 +27,7 @@ class PhoneAgentServer:
     pairing_tokens: set = field(default_factory=set)
     secret: bytes = field(default_factory=lambda: secrets.token_bytes(32))
     token_ttl_s: int = 3600
+    request_ttl_s: int = 90
     audit: list = field(default_factory=list)
     devices: dict = field(default_factory=dict)     # device_id -> {token, name, created_at}
     commands: dict = field(default_factory=dict)    # request_id -> {device_id, capability, params, state, result}
@@ -85,21 +86,33 @@ class PhoneAgentServer:
         return {"ok": True, "device_id": dev, "device_token": tok, "protocol": "LONGPOLL_HTTPS_V2"}
 
     def enqueue(self, device_id: str, capability: str, params: dict) -> dict:
-        """CHỈ server gọi. Allowlist capability; params không được chứa đường dẫn thoát sandbox."""
+        """Internal-only enqueue. Registered-device binding + capability/path allowlists."""
         if capability not in ALLOW_CAPS:
             self._emit("ENQUEUE_DENIED", device_id=device_id, capability=capability, reason="CAPABILITY_DENIED")
             raise ProtoError("CAPABILITY_DENIED")
+        if not isinstance(params, dict):
+            raise ProtoError("PARAMS_INVALID")
         p = str(params.get("path") or "")
         if p.startswith("/") or ".." in p or "\\" in p:
             self._emit("ENQUEUE_DENIED", device_id=device_id, capability=capability, reason="PATH_REJECTED")
             raise ProtoError("PATH_REJECTED")
-        rid = "CALL-" + secrets.token_hex(8)
         with self._lock:
-            self.commands[rid] = {"device_id": device_id, "capability": capability, "params": params,
-                                  "state": "QUEUED", "result": None, "created_at": time.time()}
+            if not device_id:
+                registered = sorted(self.devices)
+                if not registered:
+                    raise ProtoError("DEVICE_NOT_REGISTERED")
+                if len(registered) != 1:
+                    raise ProtoError("DEVICE_ID_REQUIRED")
+                device_id = registered[0]
+            if device_id not in self.devices:
+                raise ProtoError("DEVICE_NOT_REGISTERED")
+            rid = "CALL-" + secrets.token_hex(8)
+            self.commands[rid] = {"device_id": device_id, "capability": capability, "params": dict(params),
+                                  "state": "QUEUED", "result": None, "created_at": time.time(),
+                                  "expires_at": time.time() + max(1, self.request_ttl_s)}
             self.queue.setdefault(device_id, []).append(rid)
         self._emit("ENQUEUE", device_id=device_id, capability=capability, request_id=rid)
-        return {"ok": True, "request_id": rid}
+        return {"ok": True, "device_id": device_id, "request_id": rid}
 
     def poll(self, token: str, wait_s: float = 1.0, max_wait_s: float = 25.0) -> dict:
         dev = self._verify(token)
@@ -111,6 +124,11 @@ class PhoneAgentServer:
                     rid = q.pop(0)
                     c = self.commands.get(rid)
                     if c and c["state"] == "QUEUED":
+                        if float(c.get("expires_at", 0)) <= time.time():
+                            c["state"] = "FAILED"
+                            c["result"] = {"error": {"code": "REQUEST_EXPIRED"}}
+                            self._emit("REQUEST_EXPIRED", device_id=dev, request_id=rid)
+                            continue
                         c["state"] = "DISPATCHED"
                         self._emit("DISPATCH", device_id=dev, request_id=rid, capability=c["capability"])
                         return {"ok": True, "request_id": rid, "capability": c["capability"], "params": c["params"]}
@@ -134,6 +152,12 @@ class PhoneAgentServer:
         return {"ok": True, "request_id": rid, "state": c["state"]}
 
     def fetch_result(self, device_id: str, request_id: str) -> dict:
-        c = self.commands.get(request_id)
-        if not c or c["device_id"] != device_id: raise ProtoError("REQUEST_MISMATCH")
-        return {"ok": True, "request_id": request_id, "state": c["state"], "result": c["result"]}
+        with self._lock:
+            c = self.commands.get(request_id)
+            if not c or c["device_id"] != device_id: raise ProtoError("REQUEST_MISMATCH")
+            if c["state"] == "QUEUED" and float(c.get("expires_at", 0)) <= time.time():
+                c["state"] = "FAILED"
+                c["result"] = {"error": {"code": "REQUEST_EXPIRED"}}
+                self._emit("REQUEST_EXPIRED", device_id=device_id, request_id=request_id)
+            return {"ok": True, "device_id": device_id, "request_id": request_id,
+                    "capability": c["capability"], "state": c["state"], "result": c["result"]}

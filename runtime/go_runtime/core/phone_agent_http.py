@@ -5,11 +5,15 @@ import hmac, json, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 
-from phone_agent_server_v2 import PhoneAgentServer, ProtoError
+try:
+    from .phone_agent_server_v2 import PhoneAgentServer, ProtoError
+except ImportError:  # direct-script tests keep the core directory on sys.path
+    from phone_agent_server_v2 import PhoneAgentServer, ProtoError
 
 STATUS = {"PAIRING_DENIED": 403, "TOKEN_INVALID": 401, "TOKEN_EXPIRED": 401, "CAPABILITY_DENIED": 400,
-          "PATH_REJECTED": 400, "REQUEST_MISMATCH": 409, "REPLAY_REJECTED": 409, "INVALID_REGISTER": 400}
-MAX_BODY = 262144
+          "PATH_REJECTED": 400, "REQUEST_MISMATCH": 409, "REPLAY_REJECTED": 409, "INVALID_REGISTER": 400,
+          "DEVICE_NOT_REGISTERED": 409, "DEVICE_ID_REQUIRED": 409, "PARAMS_INVALID": 400}
+MAX_BODY = 2 * 1024 * 1024
 
 
 class PhoneAgentHTTP:
@@ -26,6 +30,8 @@ class PhoneAgentHTTP:
         return a[7:] if a.lower().startswith("bearer ") else ""
 
     def handle(self, method: str, path: str, headers: dict, body: bytes) -> tuple[int, dict]:
+        if len(body) > MAX_BODY:
+            return 413, {"ok": False, "error": {"code": "BODY_TOO_LARGE"}}
         try:
             data = json.loads(body.decode() or "{}") if body else {}
         except Exception:
@@ -37,15 +43,18 @@ class PhoneAgentHTTP:
                 return 200, self.agent.poll(self._bearer(headers), float(data.get("wait_s", 1.0)))
             if method == "POST" and path == "/api/phone/result":
                 return 200, self.agent.submit_result(self._bearer(headers), data)
-            if method == "POST" and path == "/internal/phone/enqueue":
+            if method == "POST" and path in {"/internal/phone/enqueue", "/internal/phone/result"}:
                 key = headers.get("x-internal-key") or headers.get("X-Internal-Key") or ""
                 if not key or not hmac.compare_digest(key, self.internal_key):
                     return 403, {"ok": False, "error": {"code": "INTERNAL_FORBIDDEN"}}
+                device_id = str(data.get("device_id") or "")
+                if path == "/internal/phone/result":
+                    return 200, self.agent.fetch_result(device_id, str(data.get("request_id") or ""))
                 if self.enqueue_hook:
-                    return 200, self.enqueue_hook(str(data.get("device_id") or ""),
-                                                   str(data.get("capability") or ""), data.get("params") or {})
-                return 200, self.agent.enqueue(str(data.get("device_id") or ""),
-                                               str(data.get("capability") or ""), data.get("params") or {})
+                    return 200, self.enqueue_hook(device_id, str(data.get("capability") or ""),
+                                                   data.get("params") or {})
+                return 200, self.agent.enqueue(device_id, str(data.get("capability") or ""),
+                                               data.get("params") or {})
             return 404, {"ok": False, "error": {"code": "NOT_FOUND"}}
         except ProtoError as e:
             return STATUS.get(e.code, 400), {"ok": False, "error": {"code": e.code}}

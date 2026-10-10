@@ -11,7 +11,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *  Bất biến: HTTPS bắt buộc · Bearer device-token · mỗi request 1 request_id · chỉ capability cho phép ·
  *  KHÔNG gửi lại kết quả nếu không xác định được đã thực thi (dispatcher tự chống replay bằng .hg_replay.jsonl). */
 public final class LongPollClient {
-    public interface Executor { JSONObject execute(String capability, JSONObject params) throws Exception; }
+    public interface Executor { JSONObject execute(String requestId, String capability, JSONObject params) throws Exception; }
     private final String base; private final String token; private final Executor exec;
     private final AtomicBoolean running = new AtomicBoolean(false);
 
@@ -42,7 +42,7 @@ public final class LongPollClient {
                 JSONObject params = cmd.optJSONObject("params"); if (params == null) params = new JSONObject();
                 JSONObject payload = new JSONObject().put("request_id", rid);
                 try {
-                    JSONObject res = exec.execute(cap, params);          // chỉ capability allowlist
+                    JSONObject res = exec.execute(rid, cap, params);    // bind result to the exact server request_id
                     payload.put("ok", true).put("result", res);
                 } catch (Exception ex) {
                     payload.put("ok", false).put("result", new JSONObject().put("error", String.valueOf(ex.getMessage())));

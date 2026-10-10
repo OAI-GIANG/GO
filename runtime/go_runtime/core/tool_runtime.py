@@ -517,19 +517,171 @@ def _extra_github_tools() -> list[ToolAdapter]:
     R("github.read_workflow", "Read a workflow by id.", ["repository", "workflow_id"], "/repos/{owner}/{repo}/actions/workflows/{workflow_id}")
     R("github.read_actions_run", "Read an actions run by id.", ["repository", "run_id"], "/repos/{owner}/{repo}/actions/runs/{run_id}")
     R("github.read_check_runs", "Read check-runs for a ref.", ["repository", "ref"], "/repos/{owner}/{repo}/commits/{ref}/check-runs")
-    T.append(_GhTool("github.create_branch", "Create a branch from a ref.", ["repository", "branch", "from_ref"], False, "POST", "/repos/{owner}/{repo}/git/refs", _branch_body))
+    T.append(_GhTool("github.create_branch", "Create a branch from a ref (requires approval).", ["repository", "branch", "from_ref"], False, "POST", "/repos/{owner}/{repo}/git/refs", _branch_body, destructive=True))
     T.append(_GhTool("github.delete_branch", "Delete a branch ref (destructive cleanup; requires approval).", ["repository", "branch"], False, "DELETE", "/repos/{owner}/{repo}/git/refs/heads/{branch}", lambda v, b: None, destructive=True))
-    T.append(_GhTool("github.write_file", "Create/update a file on a branch.", ["repository", "branch", "path", "content", "sha", "message"], False, "PUT", "/repos/{owner}/{repo}/contents/{path}", _write_file_body, required=["repository", "branch", "path", "content"]))
+    T.append(_GhTool("github.write_file", "Create/update a file on a branch (requires approval).", ["repository", "branch", "path", "content", "sha", "message"], False, "PUT", "/repos/{owner}/{repo}/contents/{path}", _write_file_body, required=["repository", "branch", "path", "content"], destructive=True))
     T.append(_GhTool("github.update_branch", "Update/force-move a branch ref (destructive; requires approval).", ["repository", "branch", "sha"], False, "PATCH", "/repos/{owner}/{repo}/git/refs/heads/{branch}", lambda v, b: {"sha": str(v["sha"])}, destructive=True))
-    T.append(_GhTool("github.create_pr", "Create a pull request.", ["repository", "title", "head", "base"], False, "POST", "/repos/{owner}/{repo}/pulls", lambda v, b: {"title": str(v["title"]), "head": str(v["head"]), "base": str(v["base"])}))
-    T.append(_GhTool("github.update_pr", "Update a pull request state/title/base.", ["repository", "number", "title", "state", "base"], False, "PATCH", "/repos/{owner}/{repo}/pulls/{number}", lambda v, b: {k: v[k] for k in ("title", "state", "base") if v.get(k)}, required=["repository", "number"]))
-    T.append(_GhTool("github.comment_issue", "Comment on an issue/PR.", ["repository", "number", "body"], False, "POST", "/repos/{owner}/{repo}/issues/{number}/comments", lambda v, b: {"body": str(v["body"])}))
-    T.append(_GhTool("github.create_issue", "Create an issue.", ["repository", "title"], False, "POST", "/repos/{owner}/{repo}/issues", lambda v, b: {"title": str(v["title"])}))
-    T.append(_GhTool("github.update_issue", "Update an issue state/title.", ["repository", "number"], False, "PATCH", "/repos/{owner}/{repo}/issues/{number}", lambda v, b: {k: v[k] for k in ("title", "state") if v.get(k)}))
-    T.append(_GhTool("github.dispatch_workflow", "Dispatch a workflow (workflow_dispatch).", ["repository", "workflow_id", "ref"], False, "POST", "/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches", lambda v, b: {"ref": str(v["ref"])}))
-    T.append(_GhTool("github.rerun_workflow", "Re-run an actions run.", ["repository", "run_id"], False, "POST", "/repos/{owner}/{repo}/actions/runs/{run_id}/rerun", lambda v, b: None))
+    T.append(_GhTool("github.create_pr", "Create a pull request (requires approval).", ["repository", "title", "head", "base"], False, "POST", "/repos/{owner}/{repo}/pulls", lambda v, b: {"title": str(v["title"]), "head": str(v["head"]), "base": str(v["base"])}, destructive=True))
+    T.append(_GhTool("github.update_pr", "Update a pull request state/title/base (requires approval).", ["repository", "number", "title", "state", "base"], False, "PATCH", "/repos/{owner}/{repo}/pulls/{number}", lambda v, b: {k: v[k] for k in ("title", "state", "base") if v.get(k)}, required=["repository", "number"], destructive=True))
+    T.append(_GhTool("github.comment_issue", "Comment on an issue/PR (requires approval).", ["repository", "number", "body"], False, "POST", "/repos/{owner}/{repo}/issues/{number}/comments", lambda v, b: {"body": str(v["body"])}, destructive=True))
+    T.append(_GhTool("github.create_issue", "Create an issue (requires approval).", ["repository", "title"], False, "POST", "/repos/{owner}/{repo}/issues", lambda v, b: {"title": str(v["title"])}, destructive=True))
+    T.append(_GhTool("github.update_issue", "Update an issue state/title (requires approval).", ["repository", "number", "title", "state"], False, "PATCH", "/repos/{owner}/{repo}/issues/{number}", lambda v, b: {k: v[k] for k in ("title", "state") if v.get(k)}, required=["repository", "number"], destructive=True))
+    T.append(_GhTool("github.dispatch_workflow", "Dispatch a workflow (requires approval).", ["repository", "workflow_id", "ref"], False, "POST", "/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches", lambda v, b: {"ref": str(v["ref"])}, destructive=True))
+    T.append(_GhTool("github.rerun_workflow", "Re-run an actions run (requires approval).", ["repository", "run_id"], False, "POST", "/repos/{owner}/{repo}/actions/runs/{run_id}/rerun", lambda v, b: None, destructive=True))
     T.append(_GhTool("github.read_actions_result", "Read an actions run (result).", ["repository", "run_id"], True, "GET", "/repos/{owner}/{repo}/actions/runs/{run_id}"))
     return T
+
+
+def _phone_agent_internal_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Call the same-process GO internal endpoint; never send its key to the Android client."""
+    from urllib.parse import urlsplit
+
+    base = os.getenv("HG_PHONE_AGENT_INTERNAL_URL", "").strip().rstrip("/")
+    if not base:
+        port = os.getenv("GO_PORT", "8787").strip()
+        if not port.isdigit() or not 1 <= int(port) <= 65535:
+            raise PermissionError("PHONE_AGENT_INTERNAL_PORT_INVALID")
+        base = f"http://127.0.0.1:{port}"
+    parsed = urlsplit(base)
+    if (parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+            or parsed.username or parsed.password or parsed.path not in ("", "/")
+            or parsed.query or parsed.fragment):
+        raise PermissionError("PHONE_AGENT_INTERNAL_URL_MUST_BE_LOOPBACK")
+    key = CredentialBroker().get("HG_PHONE_INTERNAL_KEY")
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    req = urllib.request.Request(
+        base + path,
+        data=raw,
+        headers={"Content-Type": "application/json", "X-Internal-Key": key},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            value = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"PHONE_AGENT_HTTP_{exc.code}") from None
+    except urllib.error.URLError:
+        raise RuntimeError("PHONE_AGENT_INTERNAL_ENDPOINT_UNAVAILABLE") from None
+    if not isinstance(value, dict):
+        raise RuntimeError("PHONE_AGENT_RESPONSE_INVALID")
+    return value
+
+
+def _normalize_phone_result(value: dict[str, Any], capability: str) -> dict[str, Any]:
+    result = dict(value or {})
+    if capability == "READ_FILE" and isinstance(result.get("content_b64"), str):
+        import base64
+        raw = base64.b64decode(result.pop("content_b64"), validate=True)
+        result["content"] = raw.decode("utf-8", errors="replace")
+    return result
+
+
+class PhoneAgentTool(ToolAdapter):
+    """A governed GO tool that queues one fixed phone capability and awaits its result."""
+
+    def __init__(self, capability: str, properties: dict[str, Any], required: list[str],
+                 *, destructive: bool = False, wait_timeout_s: float = 40.0):
+        self.capability = capability
+        self.wait_timeout_s = wait_timeout_s
+        self._spec = ToolSpec(
+            name=f"phone.agent.{capability.lower()}",
+            description=f"Execute the allowlisted {capability} capability on a registered HG phone agent.",
+            input_schema={
+                "type": "object",
+                "properties": {"device_id": {"type": "string"}, **properties},
+                "required": required,
+                "additionalProperties": False,
+            },
+            read_only=capability in {"LIST_FILES", "READ_FILE", "GET_DIFF"},
+            destructive=destructive,
+            plugin_id="go.phone_agent",
+            plugin_version="2.0.0",
+        )
+
+    def spec(self) -> ToolSpec:
+        return self._spec
+
+    def invoke(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        device_id = str(arguments.get("device_id") or "").strip()
+        params = {k: v for k, v in arguments.items() if k != "device_id"}
+        path = params.get("path")
+        if path is not None:
+            if (not isinstance(path, str) or not path or path.startswith("/")
+                    or "\x00" in path or "\\" in path or ".." in path):
+                raise ValueError("PHONE_AGENT_PATH_REJECTED")
+        if self.capability == "RUN_TEST" and params.get("test") not in {"smoke", "selftest"}:
+            raise ValueError("PHONE_AGENT_TEST_NOT_ALLOWLISTED")
+        queued = _phone_agent_internal_post("/internal/phone/enqueue", {
+            "device_id": device_id, "capability": self.capability, "params": params,
+        })
+        request_id = str(queued.get("request_id") or "")
+        resolved_device = str(queued.get("device_id") or "")
+        if not request_id or not resolved_device:
+            raise RuntimeError("PHONE_AGENT_ENQUEUE_RESPONSE_INVALID")
+        deadline = time.monotonic() + self.wait_timeout_s
+        latest = {"state": "QUEUED"}
+        while True:
+            latest = _phone_agent_internal_post("/internal/phone/result", {
+                "device_id": resolved_device, "request_id": request_id,
+            })
+            state = str(latest.get("state") or "")
+            if state == "DONE":
+                result = _normalize_phone_result(latest.get("result") or {}, self.capability)
+                return {"request_id": request_id, "device_id": resolved_device,
+                        "capability": self.capability, "state": state, "result": result}
+            if state == "FAILED":
+                result = latest.get("result") or {}
+                code = ((result.get("error") or {}).get("code") if isinstance(result, dict) else None)
+                raise RuntimeError("PHONE_AGENT_OPERATION_FAILED" + (":" + str(code) if code else ""))
+            if time.monotonic() >= deadline:
+                return {"request_id": request_id, "device_id": resolved_device,
+                        "capability": self.capability, "state": state or "UNKNOWN",
+                        "pending": True, "timeout_s": self.wait_timeout_s}
+            time.sleep(0.25)
+
+
+class PhoneAgentResultTool(ToolAdapter):
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="phone.agent.get_result",
+            description="Read the current state/result of a previously queued HG phone-agent request.",
+            input_schema={
+                "type": "object",
+                "properties": {"device_id": {"type": "string"}, "request_id": {"type": "string"}},
+                "required": ["device_id", "request_id"],
+                "additionalProperties": False,
+            },
+            read_only=True,
+            destructive=False,
+            plugin_id="go.phone_agent",
+            plugin_version="2.0.0",
+        )
+
+    def invoke(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        value = _phone_agent_internal_post("/internal/phone/result", {
+            "device_id": str(arguments["device_id"]),
+            "request_id": str(arguments["request_id"]),
+        })
+        capability = str(value.get("capability") or "")
+        if value.get("state") == "DONE" and isinstance(value.get("result"), dict):
+            value["result"] = _normalize_phone_result(value["result"], capability)
+        return value
+
+
+def _phone_agent_tools() -> list[ToolAdapter]:
+    string = {"type": "string"}
+    return [
+        PhoneAgentTool("LIST_FILES", {"path": string}, []),
+        PhoneAgentTool("READ_FILE", {"path": string}, ["path"]),
+        PhoneAgentTool("WRITE_FILE", {"path": string, "content_b64": string, "expect_sha256": string,
+                                      "expected_current_sha256": string},
+                       ["path", "content_b64"], destructive=True),
+        PhoneAgentTool("APPLY_PATCH", {"path": string, "patch": string, "expected_current_sha256": string},
+                       ["path", "patch", "expected_current_sha256"], destructive=True),
+        PhoneAgentTool("GET_DIFF", {"path": string, "content_b64": string}, ["path", "content_b64"]),
+        PhoneAgentTool("RUN_TEST", {"test": string}, ["test"], wait_timeout_s=75.0),
+        PhoneAgentResultTool(),
+    ]
 
 
 def default_tool_registry() -> ToolRegistry:
@@ -544,4 +696,6 @@ def default_tool_registry() -> ToolRegistry:
     registry.register(VPS1HealthTool())
     registry.register(VPS2HealthTool())
     registry.register(RepoForensicsTool())
+    for t in _phone_agent_tools():
+        registry.register(t)
     return registry
