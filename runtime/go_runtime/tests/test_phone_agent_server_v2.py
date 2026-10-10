@@ -1,5 +1,5 @@
 import pathlib, sys, time
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "go_runtime" / "core"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "core"))
 from phone_agent_server_v2 import PhoneAgentServer, ProtoError   # noqa
 P, F = [], []
 def rec(n, c, d=""): (P if c else F).append((n, d))
