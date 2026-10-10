@@ -1,94 +1,80 @@
 # MTC-1.0 Phase 2 — Acceptance Matrix
 
-Legend — **Evidence class**: `code` (static), `unit` (isolated), `replica` (executed,
-not on the phone), `runtime` (on the real device/edge), `external` (web doc).
-**Status**: `PASS` / `FAIL` / `BLOCKED` / `NOT_RUN`. Runtime PASS requires device/edge evidence.
+Legend — **Evidence class**: `code` (static), `unit` (isolated), `replica` (executed off-target),
+`runtime` (on the real device/host), `external` (web doc). **Status**: `PASS`/`FAIL`/`BLOCKED`/`NOT_RUN`.
+Runtime PASS requires on-target evidence. Raw captures in `tests/OUTPUT_*.txt`.
 
-Mandate name → real artifact:
-
-| Mandate | Real artifact |
-|---|---|
-| `toolplane` (6 tools) | `/sdcard/Phần Mềm HG/toolplane/hg_tool_plane.py` (sha256 `16AE914D…524`) |
-| `stt-health-readonly.yaml` | `HG-GO-DEPLOY/HG-CONNECTOR-HEALTH-OPENAPI.yaml` |
-| `verify_b1_runtime.py` | does not exist → runtime probes + `tests/test_*` |
-| `c_allow.sh` | does not exist → canonical `AuthorityRoot.issue()` path |
-| branch `mtc1/legacy-decoupling-governance` | does not exist → `feature/stt-b1-b5-reconciliation-20261010` |
-
-Raw captures: `tests/OUTPUT_runtime_evidence.txt`, `tests/OUTPUT_go_replica_boot.txt`,
-`tests/OUTPUT_b5b_allow_replica.txt`, `tests/OUTPUT_regression.txt`,
-`tests/OUTPUT_supervisor_logic.txt`, `tests/OUTPUT_governance_negative.txt`.
+Targets (measured): **VPS1** `160.191.242.198` (`vps-hjcscw`) hosts the canonical GO runtime
+(`/opt/go`, systemd `go-runtime`, `127.0.0.1:8877`) and the edge (`hg-edge.service`). The
+**phone** (OPPO PKC110) runs the HG legacy runtime + the toolplane. `go_health` probes VPS1.
 
 ---
 
-## Gate B1 — `go_health` (liveness + authenticated HTTP 200)
+## Gate B1 — `go_health` (liveness + authenticated HTTP 200) — target VPS1
 
 | Item | Status | Class | Evidence |
 |---|---|---|---|
-| VPS1 edge liveness | **PASS** | runtime | `GET /edge/health` → 200 `{"ok":true,"edge":"HG_EDGE","gate":true}` |
-| Auth enforced (no token ⇒ 401) | **PASS** | runtime | gate endpoint → 401; GO `/v1/status` (replica) → 401 |
-| GO entrypoint sound (`-m runtime.go_runtime.core.server`) | **PASS** | replica | `/healthz` `status:ok`, `/v1/status` RUNNING, 28 ops incl. `vps1.edge.health` |
-| GO governance source verified | **PASS** | replica | `source_sha256=cc1a8b17…` == protected Policy V1 hash |
-| **GO runtime on phone** | **FAIL** | runtime | `runsv go-runtime` present but server lives <~2s (pid sample 2 caught `30217`, samples 1/3 empty); **no `127.0.0.1:8877` listener** |
-| GO crash-loop root cause | **PASS (identified)** | replica | `verify_governance_source()` raises `V1_CANONICAL_SOURCE_MISSING`; deploy manifest has no `MASTER_GOVERNANCE_RULESET_V1*` → startup crash (`tests/OUTPUT_go_crashloop_rootcause.txt`) |
-| Legacy HG `/api/health` via `adb forward` | **PASS** | runtime | `HTTP 200 {"runtime":"READY","core":"HG_LOCAL","phone_bridge":"V2"}` |
+| GO process stable | **PASS** | runtime | `go-runtime` active/running, MainPID 83645, `Restart=always` |
+| Listener `127.0.0.1:8877` | **PASS** | runtime | `ss` → python3 pid 83645 |
+| `/healthz` contract | **PASS** | runtime | `{"status":"ok","version":"0.1.1"}` |
+| `/v1/status` authenticated | **PASS** | runtime | HTTP **200**, `environment=production`, 28 ops |
+| Auth enforced (no token) | **PASS** | runtime | HTTP **401** |
+| Identity: commit/tree | **PASS** | runtime | `GO_COMMIT=d635e883…`, `GO_TREE_SHA=00ba3fcd…` |
+| Phone-local GO (separate deploy) | **FAIL** | runtime | crash loop; root-caused: missing governance source (`tests/OUTPUT_go_crashloop_rootcause.txt`) |
 
-## Gate B2 — supervisor runtime
-
-| Item | Status | Class | Evidence |
-|---|---|---|---|
-| runit supervision running | **PASS** | runtime | `runsvdir` pid 9688; `runsv{go-runtime,hg-runtime,hg-backend,sshd,…}` |
-| Supervisor process running | **PASS** | runtime | pid `10459` `bash …/toolplane/health-tunnel-supervisor.sh` |
-| Tunnel process / serving | **FAIL** | runtime | 0 `health-tunnel.py`; last `GATE_REQUEST` `2026-10-10T00:38:59Z` |
-| Root cause | **PASS (identified)** | code | `start-health-tunnel.sh` exports `HG_EDGE_*`; supervisor did not |
-| Fix (hardened supervisor) | **PASS** | unit | `tests/OUTPUT_supervisor_logic.txt` 15/15 incl. T7 env-export proof |
-| Device E2E | **NOT_RUN** | runtime | needs Termux; `test_supervisor_e2e_linux.sh` provided |
-
-## Gate B5-a — deny-list, `audit_tail`, audit integrity
+## Gate B2 — tunnel/supervisor runtime
 
 | Item | Status | Class | Evidence |
 |---|---|---|---|
-| 6 tools exact | **PASS** | code | `selftest` → the six names |
-| Deny-list; `approved=true` no bypass | **PASS** | unit | governance negative 13/13 |
-| Audit hash-chain verify + tamper detect | **PASS** | unit | good→ok, tamper→`hash mismatch` |
-| Canonical fail-closed for side-effect tools | **PASS** | unit | mapped/unmapped/unavailable/malformed |
-| Governance coverage gap | **FIXED** | code | `patch/hg_tool_plane.governance.patch` (default-deny unmapped) |
-| Deny-list / `audit_tail` on **runtime** | **NOT_RUN** | runtime | toolplane needs Termux; phone audit is private |
+| Supervisor process (phone) | **PASS** | runtime | pid `10459` running |
+| Tunnel draining / serving | **FAIL** | runtime | edge `queue=3, pending=0`; `GATE_TIMEOUT 504` + BrokenPipeError in `hg-edge` |
+| Restart-loop | **FAIL** | runtime | no `health-tunnel.py`; supervisor cannot keep it up |
+| Fix (hardened supervisor) | **PASS** | unit | 15/15 incl. env-export proof |
+| `edge queue=0` | **FAIL** | runtime | currently `3` |
+
+## Gate B5-a — tool-layer deny / audit
+
+| Item | Status | Class | Evidence |
+|---|---|---|---|
+| 6 tools exact | **PASS** | code | toolplane `selftest` |
+| Deny-list; `approved` no bypass | **PASS** | unit | governance negative 13/13 |
+| Audit hash-chain verify/tamper | **PASS** | unit | module test |
+| Governance coverage gap | **FIXED** | code | `patch/hg_tool_plane.governance.patch` |
+| Canonical tool-layer DENY on real runtime | **PASS** | runtime | VPS1 `ToolGovernance.execute(vps1.edge.health)` → DENIED `AUTHORITY_PROVENANCE_MISSING`; production ledger `/opt/go/data/tool-events.jsonl` (1733 lines) shows phone-originated DENIED events |
+| Phone `audit_tail` / audit-chain | **NOT_RUN** | runtime | phone audit is Termux-private |
 
 ## Gate B4 — ChatGPT Action E2E
 
 | Item | Status | Class | Evidence |
 |---|---|---|---|
-| Schema valid OpenAPI 3.1, GET-only, Bearer | **PASS** | code | `HG-CONNECTOR-HEALTH-OPENAPI.yaml` |
-| HTTPS endpoint + valid TLS | **PASS** | runtime | Let's Encrypt cert, IP SAN `160.191.242.198`, expires 2026-10-13 |
-| No token plaintext in repo/schema/log | **PASS** | code | yaml references `gateBearer` only |
-| Import + E2E (real request, HTTP 200) | **BLOCKED** | external | no ChatGPT UI/credentials; workspace domain allowlist |
+| Schema valid OpenAPI 3.1, GET, Bearer | **PASS** | code | `HG-CONNECTOR-HEALTH-OPENAPI.yaml` |
+| HTTPS + valid TLS | **PASS** | runtime | Let's Encrypt cert, IP SAN `160.191.242.198` |
+| TLS renewal configured | **FAIL/BLOCKED** | runtime | certbot **not installed**, no renewal timer; cert expires `2026-10-13T01:54Z` |
+| Gate auth enforced | **PASS** | runtime | `/h/...` no token → 401 |
+| E2E real request HTTP 200 | **BLOCKED** | runtime | tunnel down (queue=3/GATE_TIMEOUT); also needs ChatGPT UI + domain allowlist |
 
-## Gate B5-b — canonical GO DENY + ALLOW
+## Gate B5-b — canonical DENY + ALLOW
 
 | Item | Status | Class | Evidence |
 |---|---|---|---|
-| DENY: no external root ⇒ `AUTHORITY_ROOT_NOT_PROVISIONED` | **PASS** | replica | `tests/OUTPUT_b5b_allow_replica.txt` |
-| DENY: ephemeral root cannot issue ⇒ `AUTHORITY_ROOT_NOT_TRUSTED` | **PASS** | replica | same |
-| DENY: no revocation store ⇒ `AUTHORITY_REVOCATION_STORE_NOT_CONFIGURED` | **PASS** | replica | same |
-| DENY: no token file ⇒ `AUTHORITY_PROVENANCE_MISSING` | **PASS** | replica | same |
-| **ALLOW mechanics** (external root→token→`STARTED→COMPLETED`→witness) | **PASS** | replica | ledger `ACCEPTED..COMPLETED`, witness + `governance_source_sha256` |
-| Idempotency (`IDEMPOTENT_RESULT_REUSE_DENIED`) | **PASS** | replica | same |
-| ALLOW on the **phone runtime** | **BLOCKED** | runtime | external owner must provision root/issuers/token |
+| DENY (replica) | **PASS** | replica | `tests/OUTPUT_b5b_allow_replica.txt` |
+| **DENY (real runtime VPS1)** | **PASS** | runtime | `tests/OUTPUT_vps1_runtime.txt` (ledger `…→AUTHORIZATION_PENDING→DENIED`) |
+| ALLOW mechanics (replica) | **PASS** | replica | external root→token→`STARTED→COMPLETED`+witness+idempotency |
+| ALLOW on real target | **BLOCKED** | runtime | `/etc/hg/authority/` **absent** (no `root.key`); authority env empty; `TRUSTED_APPROVAL_ISSUERS` empty; must be provisioned by the external owner (not Deep) |
 
 ## Gate — Evidence / manifest / SHA-256
 
 | Item | Status | Class | Evidence |
 |---|---|---|---|
-| Canonical regression (reproduced) | **PASS** | unit | 196 passed, exit 0 |
-| This directory hashed | **PASS** | code | `MANIFEST.sha256` (+ `verify_artifacts.sh`) |
-| Repo manifest vs phone | **PARTIAL** | code | `GO-MATERIALIZATION-MANIFEST.json`; no phone hash verify |
+| Canonical regression | **PASS** | unit | 196 passed, exit 0 |
+| This directory hashed (LF check) | **PASS** | code | `MANIFEST.sha256`; fresh-clone `sha256sum -c` all OK |
 
 ---
 
 ## Overall
 
-**INCOMPLETE.** Notable progress this run: GO entrypoint and full ALLOW/DENY authority
-mechanics verified on a **replica**; phone GO crash-loop precisely characterised; runit
-supervision confirmed; edge TLS confirmed valid. Remaining blockers require **Termux access
-(B1, B2, B5-a runtime)**, **ChatGPT UI (B4)**, and **external authority provisioning
-(B5-b ALLOW)** — exact actions in `OWNER_RUNBOOK.md`.
+**INCOMPLETE.** New runtime PASS this round: **B1** (VPS1 GO liveness + authenticated 200 +
+401) and **B5-b DENY** (VPS1 canonical ToolGovernance, and the production ledger shows real
+DENIED events). Remaining: **B2** tunnel (edge `queue=3`, phone tunnel not running), **B4**
+tunnel+UI+**cert renewal**, **B5-b ALLOW** (external authority not provisioned), **B5-a**
+phone-side audit runtime. Exact owner actions in `OWNER_RUNBOOK.md`.

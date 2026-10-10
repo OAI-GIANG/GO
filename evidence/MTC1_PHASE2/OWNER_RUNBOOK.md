@@ -1,163 +1,117 @@
 # Owner Runbook — exact minimal actions to unblock (MTC-1.0 Phase 2)
 
-Access model (measured 2026-10-10T10:36Z):
-- Deep holds: `adb` (read-only) on OPPO PKC110 `BIXSMFNBRCNN95T4`; VPS1 edge HTTPS (read).
-- **runit IS running** on the phone: `runsvdir …/usr/var/service` (pid 9688) supervises
-  `go-runtime`, `hg-runtime`, `hg-backend`, `sshd`, `cloudflared`, `og-runtime`, `ssh-agent`.
-- `sshd:8022` is **closed**; `adb` cannot read/write Termux private storage (Android UID
-  isolation — not to be bypassed). So all Termux mutations below are **owner** actions.
-- Never print token values. All examples read tokens as data and print only presence/size.
-
-Grounding: Termux services README (runit): enable with `sv-enable`/`sv up`; on failure read
-`$PREFIX/var/log/sv/<service>/current`. runit `runsv(8)`: restarts after an immediate exit
-(1s). Canonical `GO_RUNTIME_DEPLOYMENT_V1`: the **unit owns the GO process**.
+Access measured 2026-10-10T10:50Z:
+- Workstation → **root SSH to VPS1** `160.191.242.198` (`vps-hjcscw`) works (key
+  `love_admin_ed25519`). VPS1 hosts the canonical GO runtime (`/opt/go`, systemd
+  `go-runtime`, `127.0.0.1:8877`) and the edge (`hg-edge.service`).
+- Phone: `adb` read-only **+ `adb` can write `/sdcard`**; `sshd:8022` closed; Termux private
+  storage NOT reachable (Android UID isolation — not bypassed).
+- VPS2 `36.50.135.233`: not reachable with available keys.
+- Never print token/key values; read them as data.
 
 ---
 
-## 0. Preflight (Termux, read-only, safe to paste)
+## 0. Preflight (safe, read-only)
 
+VPS1 (run over SSH as root):
 ```sh
-set -u
-echo "== tools =="; command -v sv; command -v python3; command -v curl
-echo "== service supervision =="; sv status go-runtime; sv status hg-runtime
-echo "== GO tree =="; test -d "$HOME/go/runtime/go_runtime/core" && echo GO_TREE_OK || echo GO_TREE_MISSING
-echo "== GO env (presence only, no values) =="
-if [ -f "$HOME/.config/hg/go.env" ]; then
-  stat -c 'go.env mode=%a' "$HOME/.config/hg/go.env"
-  echo "GO_API_TOKEN_present=$(grep -c '^GO_API_TOKEN=' "$HOME/.config/hg/go.env")"
-else echo "go.env MISSING"; fi
-echo "== recent GO service log =="; tail -n 40 "$PREFIX/var/log/sv/go-runtime/current" 2>/dev/null
-echo "== edge config presence =="
-[ -f "$HOME/.config/hg/edge.conf" ] && echo edge.conf_OK || echo edge.conf_MISSING
-[ -f "$HOME/.config/hg/edge_token" ] && stat -c 'edge_token mode=%a size=%s' "$HOME/.config/hg/edge_token" || echo edge_token_MISSING
+systemctl is-active go-runtime; ss -ltnp | grep 8877
+curl -s -m5 http://127.0.0.1:8877/healthz
+T=$(grep -m1 '^GO_API_TOKEN=' /etc/go/go-runtime.env | cut -d= -f2- | tr -d '"')
+curl -s -o /dev/null -w 'status HTTP %{http_code}\n' -H "Authorization: Bearer $T" http://127.0.0.1:8877/v1/status
+curl -s http://127.0.0.1:8899/edge/health
 ```
-Expected for a healthy GO: `sv status go-runtime` shows `run:` and the log shows a listening
-line. **Stop criterion:** if `GO_TREE_MISSING` or `go.env MISSING`, do NOT start the service;
-finish materialize/credentials first (below).
+Phone (Termux): `sv status go-runtime hg-runtime`; read
+`$PREFIX/var/log/sv/go-runtime/current`; check `~/.config/hg/edge.conf` + `edge_token` (mode 600).
+Stop if a prerequisite is missing — fix it before starting anything.
+
+### B1 status (already PASS on VPS1)
+GO is `active`, listener `8877`, `/healthz` → `{"status":"ok"}`, `/v1/status` (Bearer) → 200,
+no token → 401; `GO_COMMIT=d635e883…`. No action needed for B1 on the canonical host.
 
 ---
 
-## 1. B1 — stop the GO crash/restart loop (who: owner, Termux)
+## 1. Phone-local GO (only if you require a GO runtime on the phone)
 
-Observed by Deep: `runsv go-runtime` exists but the server process lives <~2s and never
-binds `127.0.0.1:8877` (no listener) → **crash loop**. Deep verified the entrypoint itself
-is sound on a replica (see `tests/OUTPUT_go_replica_boot.txt`); the fault is environmental.
-
-**Root cause (demonstrated on replica, `tests/OUTPUT_go_crashloop_rootcause.txt`):**
-`GOApplication.__init__` runs `config.validate()` then `verify_governance_source()`, which
-hard-requires `control/MASTER_GOVERNANCE_RULESET_V1.md` at sha256 `cc1a8b17…` plus its
-approval binding. The deploy manifest `GO-MATERIALIZATION-MANIFEST.json` contains **no**
-`control/MASTER_GOVERNANCE_RULESET_V1*` entries → a `~/go` built from it raises
-`V1_CANONICAL_SOURCE_MISSING` on startup → `runsv` restarts it (matching the <2s churn and
-the absence of any `8877` listener). A second possible blocker: missing `GO_API_TOKEN`
-(`ValueError` unless anonymous).
-
-Minimal fix (in order):
-- **Restore the governance files**: redeploy `~/go` from the **current canonical branch**
-  (which includes `control/MASTER_GOVERNANCE_RULESET_V1.md` + binding):
-  ```sh
-  cd ~/HG-GO-DEPLOY 2>/dev/null || cd /sdcard/HG-GO-DEPLOY
-  bash preflight-go.sh            # writes ~/go-candidate and verifies it
-  bash deploy-go-service.sh       # creates the service; if ~/go already exists, replace it
-  ```
-- **Ensure `GO_API_TOKEN`** exists in `~/.config/hg/go.env` (mode 600) — the runtime requires
-  a token unless `GO_ALLOW_ANONYMOUS=true`. Do not print the value.
-- **Stale/incorrect service `run`** → re-create it from the `deploy-go-service.sh` G4 template.
-
-Confirm the cause first with the log (it will name the exact `GovernanceSourceError` code):
+Measured: `runsv go-runtime` exists but the process churns (<2s), never binds 8877.
+Root cause (replica-demonstrated): `GOApplication.__init__` → `verify_governance_source()`
+requires `control/MASTER_GOVERNANCE_RULESET_V1.md` (sha `cc1a8b17…`); the phone deploy
+manifest has no such entry → `V1_CANONICAL_SOURCE_MISSING`. Fix = redeploy a **complete**
+tree, never a placeholder:
 ```sh
+cd ~/HG-GO-DEPLOY 2>/dev/null || cd /sdcard/HG-GO-DEPLOY
+bash preflight-go.sh && bash deploy-go-service.sh   # must include control/ governance files
+# then confirm the cause first:
 tail -n 60 "$PREFIX/var/log/sv/go-runtime/current"
 ```
-
-Restart the **service** (canonical-aligned; the unit owns the process):
-```sh
-sv down go-runtime 2>/dev/null; sleep 1; sv up go-runtime; sleep 3
-sv status go-runtime
-tail -n 40 "$PREFIX/var/log/sv/go-runtime/current"
-curl -fsS -m 5 http://127.0.0.1:8877/healthz || echo HEALTHZ_FAILED
-```
-**Stop criterion:** if it still exits, STOP and return the last 40 log lines; do not loop.
-
-### About `run-go-nohup.sh`
-`run-go-nohup.sh` starts GO **without runit** and is a **deviation** from
-`GO_RUNTIME_DEPLOYMENT_V1` ("the unit owns the GO process"). Since `runsvdir` is running,
-prefer the `go-runtime` service. Use nohup only as a time-boxed fallback, and only if you
-then wrap it under runsv; otherwise a second unsupervised process violates the single-owner
-invariant. If used: `pgrep -f go_runtime.core.server` must show exactly **one** process.
-
-Deep will then run (over `adb forward tcp:18877 tcp:8877`): `/healthz` (contract), and
-(with the token, held on-device) `/v1/status`; capturing raw output, exit code, timing.
+Do not use `run-go-nohup.sh` as a fix (uncanonical: `GO_RUNTIME_DEPLOYMENT_V1` says the unit
+owns the process). One restart attempt only; return the log if it still fails.
 
 ---
 
-## 2. B2 — restore tunnel supervision (who: owner, Termux)
+## 2. B2 — tunnel recovery (phone + VPS1 verification)
 
-Observed: supervisor `10459` runs, but **no `health-tunnel.py`** process and no `GATE_REQUEST`
-since `2026-10-10T00:38:59Z`. Root cause: the supervisor did not export `HG_EDGE_*`.
+Measured: edge `/edge/tunnel/status` → `queue=3, pending=0`; `hg-edge` logs `GATE_TIMEOUT 504`;
+no `health-tunnel.py` process on the phone. The phone tunnel is not draining.
 
+Install the hardened supervisor (fixes missing `HG_EDGE_*` export) in Termux:
 ```sh
-# back up, then install the hardened supervisor (contents in patch/; or apply the diff)
 cp "$HOME/health-tunnel-supervisor.sh" "$HOME/health-tunnel-supervisor.sh.bak-$(date -u +%Y%m%dT%H%M%SZ)" 2>/dev/null || true
-# place patch/health-tunnel-supervisor.hardened.sh in $HOME (or /sdcard) and run it, e.g.:
-#   pkill -f health-tunnel-supervisor.sh
-#   nohup bash "$HOME/health-tunnel-supervisor.hardened.sh" >> "$HOME/health-tunnel.log" 2>&1 &
-# verify config (no token value printed)
-stat -c 'edge_token mode=%a size=%s' "$HOME/.config/hg/edge_token"
+# place patch/health-tunnel-supervisor.hardened.sh (from this repo) in $HOME, then:
+pkill -f health-tunnel-supervisor.sh 2>/dev/null
+nohup bash "$HOME/health-tunnel-supervisor.hardened.sh" >> "$HOME/health-tunnel.log" 2>&1 &
 ```
-Expected: exactly **one** `health-tunnel.py`; the log shows `tunnel alive`; no restart flap.
-
-Deep will verify: one tunnel process; `/sdcard/hg-tunnel-evidence.jsonl` gains a
-`GATE_REQUEST … "status": 200`; edge tunnel status `queue=0`.
-
----
-
-## 3. B5-a — tool-layer runtime deny + phone audit (who: owner enables Termux access)
-
-Deep cannot launch the toolplane on-device without Termux. Once reachable:
-```sh
-python3 ~/hg/core/runtime/toolplane/hg_tool_plane.py selftest   # must list the six tools
-```
-Deep will then run a governed deny call, `verify_audit()` over the real
-`~/.config/hg/toolplane_audit.jsonl`, and capture raw output + exit code + SHA-256.
+Verify (phone): exactly one `health-tunnel.py`; log `tunnel alive`.
+Verify (VPS1, Deep/owner): `/edge/tunnel/status` shows `queue` draining toward `0`; a gate call
+`/h/phone-primary-u0_a460/api/health` with the gate token returns HTTP 200; `/sdcard/
+hg-tunnel-evidence.jsonl` gains a `GATE_REQUEST status=200`.
 
 ---
 
-## 4. B4 — ChatGPT Action E2E (who: owner, GPT editor)
+## 3. B4 — ChatGPT Action + TLS
 
-Schema facts verified: `openapi 3.1.0`, server `https://160.191.242.198`, GET
-`operationId hgPhoneHealth`, bearer scheme `gateBearer`. TLS verified this run: **valid
-Let's Encrypt cert, IP SAN `160.191.242.198`, expires 2026-10-13** (renew before/after).
-Steps: Actions → Create new action → paste schema; Authentication → API key → **Bearer**
-with `HG_GATE_TOKEN` in the **secret** field; ensure the workspace action-domain allowlist
-includes `160.191.242.198`; click **Test**; expect HTTP 200. Then Deep verifies server-side:
-a new `GATE_REQUEST status=200` in the tunnel evidence.
-Note: OpenAI is retiring custom GPTs → plan a Plugins migration.
+Schema verified (openapi 3.1.0, GET `hgPhoneHealth`, bearer). TLS verified: valid Let's Encrypt
+cert, IP SAN `160.191.242.198`, `notAfter 2026-10-13T01:54:10Z`. **Renewal is NOT configured**
+(certbot absent, no timer). Owner/authority action before expiry:
+- install an ACME client (e.g. `certbot`) and (re)issue via HTTP-01/webroot or DNS-01, then add
+  a systemd timer/cron for `certbot renew`; **or** reissue by the same method originally used
+  (per EFF certbot guide). Deep did not alter TLS.
+- GPT editor: Actions → Create new action → paste the OpenAPI; Authentication → **Bearer** with
+  `HG_GATE_TOKEN` in the **secret** field; ensure the workspace action-domain allowlist includes
+  `160.191.242.198`; **Test** → expect HTTP 200. (Custom GPTs are deprecating → plan Plugins.)
+- E2E gate requires the tunnel up (section 2). Deep verifies server-side: a new
+  `GATE_REQUEST status=200`.
 
 ---
 
-## 5. B5-b ALLOW — provision canonical authority (who: external authority owner)
+## 4. B5-a — phone toolplane runtime
 
-Deep cannot and must not self-provision. Prerequisites (from `authority.py`, `approval.py`,
-`tool_governance.py`, verified on replica):
-1. `HG_AUTHORITY_ROOT_KEY_FILE` (default `/etc/hg/authority/root.key`) with an externally
-   owned secret → provenance `EXTERNAL_FILE`. Without it, `AuthorityRoot.instance()`
-   raises `AUTHORITY_ROOT_NOT_PROVISIONED` (fail-closed; no self-trust).
-2. `HG_AUTHORITY_REVOCATION_FILE` configured (revocation persistence; else
-   `AUTHORITY_REVOCATION_STORE_NOT_CONFIGURED`).
-3. A trusted bootstrap **outside the runtime package** populating `TRUSTED_APPROVAL_ISSUERS`
-   (destructive approvals stay blocked until then).
-4. Issue a token and point `HG_TOOL_AUTHORITY_TOKEN_FILE` at it; set
-   `HG_TOOL_AUTHORITY_SUBJECT=HG_SESSION_*`. Token JSON must carry:
-   `token_id, subject(HG_SESSION_*), scope⊇{tool:<name>, task:<task_id>}, action=execute,
-   audience=tool:<name>, issued_at, expires_at, nonce, sig` (signed by the external root).
+Once Termux is reachable: `python3 ~/hg/core/runtime/toolplane/hg_tool_plane.py selftest`
+(must list the six tools); then Deep runs a governed deny call and `verify_audit()` over
+`~/.config/hg/toolplane_audit.jsonl`, capturing raw output + exit code + SHA-256.
 
-Deep will then run the ALLOW E2E and verify `state=COMPLETED`, witness, ledger
-`STARTED→COMPLETED`, idempotency and provenance — raw output, exit code and hash saved.
+---
+
+## 5. B5-b ALLOW — canonical authority provisioning (external owner)
+
+Measured on VPS1: `/etc/hg/authority/` is **absent** (no `root.key`); `/etc/go/go-runtime.env`
+has empty `HG_TOOL_AUTHORITY_PROVENANCE/_SUBJECT`; the deployed VPS1 ToolGovernance is the
+**env-provenance** variant (its DENY = `AUTHORITY_PROVENANCE_MISSING`, confirmed on the real
+runtime and in the production ledger). The newer token-file/`AuthorityRoot` design lives only
+on `feature/stt-b1-b5-…` (not deployed). Reconcile which contract is authoritative, then:
+1. Provision an **external** authority root (`HG_AUTHORITY_ROOT_KEY_FILE`, default
+   `/etc/hg/authority/root.key`) — provenance `EXTERNAL_FILE` (else `AUTHORITY_ROOT_NOT_PROVISIONED`).
+2. Configure `HG_AUTHORITY_REVOCATION_FILE`.
+3. Populate `TRUSTED_APPROVAL_ISSUERS` via trusted bootstrap outside the runtime package.
+4. Issue a scoped token to `HG_TOOL_AUTHORITY_TOKEN_FILE`, set `HG_TOOL_AUTHORITY_SUBJECT=HG_SESSION_*`.
+
+Deep will not self-provision. After provisioning, Deep runs DENY + ALLOW E2E and verifies
+`COMPLETED`, witness, ledger `STARTED→COMPLETED`, and idempotency.
 
 ---
 
 ## Stop criteria (all)
-- Do not start GO if the tree/credentials are missing (fix prerequisites first).
-- Do not loop restarts: one attempt, then return logs.
-- Do not print or paste any token/key value.
-- Do not create authority or verifier identities Deep does not own.
+- Fix prerequisites before starting; never start GO/tunnel with missing config.
+- One restart attempt, then return logs — no infinite restart.
+- Never print or paste tokens/keys; no secrets in chat/repo/log.
+- Never create authority/verifier identities Deep does not own. No placeholder governance files.

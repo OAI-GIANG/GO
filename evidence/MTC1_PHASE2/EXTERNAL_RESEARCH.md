@@ -105,3 +105,18 @@ Read directly from `OAI-GIANG/GO` (branch `feature/stt-b1-b5-reconciliation-2026
 Decisions affected (B5-b): provisioning `root.key` is necessary but **not sufficient**;
 trusted approval issuers/verifier must also be provisioned by an external principal. No
 fabricated external provenance is permitted.
+
+## 5. TLS / certificates (B4)
+
+### https://eff-certbot.readthedocs.io/en/stable/using.html
+Verified content: `certbot renew` re-checks installed certificates and renews those near
+expiry; automated renewal is a scheduled task (cron line or a **systemd timer**, visible via
+`systemctl list-timers`); `certbot certificates` lists expiry and paths; certificates created
+with `--manual` do **not** auto-renew without auth hooks; wildcard certs require DNS-01.
+Decision: VPS1 serves the edge certificate from `/etc/letsencrypt/live/160.191.242.198`
+(Let's Encrypt, IP SAN, `notAfter 2026-10-13T01:54:10Z`). Measured: **certbot is NOT
+installed and there is no renewal timer**, so issuance was manual/other. B4 needs a working
+renewal path before expiry: install an ACME client (e.g. certbot) + HTTP-01/webroot or DNS-01
+and add a timer/cron, **or** reissue by the same manual method — an owner/authority action.
+Deep deliberately did not install or modify TLS (production change requiring authority).
+Note: `https://letsencrypt.org/docs/renewal/` returned 404; the EFF certbot guide was used.

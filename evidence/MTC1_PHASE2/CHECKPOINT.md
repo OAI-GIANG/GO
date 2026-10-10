@@ -1,60 +1,53 @@
 # MTC-1.0 Phase 2 — Execution Checkpoint
 
-- Updated: 2026-10-10T10:37Z
+- Updated: 2026-10-10T10:50Z
 - Branch: `feature/stt-b1-b5-reconciliation-20261010`
-- Base HEAD (before this commit): `05423bc6c18ec7287b631a4c1b17af775837f1f2`
-- Remote: `github.com/OAI-GIANG/GO`
+- Base HEAD before this commit: `4316ed155f60018fe3f2790313a22cb6a2dd3769`
 - Overall status: **INCOMPLETE**
 
 ## OBJECTIVE
-Close the remaining mandatory acceptance gates of HG MTC-1.0 Phase 2 with
-implementation, runtime verification, E2E tests and independently checkable evidence.
+Close the remaining mandatory acceptance gates of HG MTC-1.0 Phase 2 with implementation,
+runtime verification, E2E tests and independently checkable evidence.
 
-## SCOPE
-- Allowed branch only. No merge, no `main`, no `hg-core` change, no production mutation.
-- Device access held: `adb` read-only (+ loopback `adb forward`), VPS1 edge HTTPS read.
+## SCOPE / ACCESS (measured this run)
+- Workstation → **root SSH to VPS1** `160.191.242.198` (`vps-hjcscw`) works (key
+  `love_admin_ed25519`). This is the canonical deployment host for `go_health` and B5-b.
+- Phone: `adb` read-only **+ `adb` can write `/sdcard`**; `sshd:8022` still closed; Termux
+  private storage not reachable. VPS2 `36.50.135.233` not reachable with available keys.
 
-## INPUT (measured this run, 2026-10-10T10:36Z)
-- runit running: `runsvdir` pid 9688 + `runsv go-runtime` (9694), `runsv hg-runtime`,
-  `hg-backend`, `sshd`, `cloudflared`, `og-runtime`, `ssh-agent`.
-- **GO on phone: crash/restart loop** — server lives <~2s (pid `30217` seen once, then
-  gone), **no `127.0.0.1:8877` listener**. `runsv go-runtime` restarts it.
-  Root cause (replica-demonstrated): `GOApplication.__init__` → `verify_governance_source()`
-  requires `control/MASTER_GOVERNANCE_RULESET_V1.md` (sha `cc1a8b17…`); the deploy manifest
-  has no such entry → `V1_CANONICAL_SOURCE_MISSING` → exit.
-- Legacy HG `/api/health` on `127.0.0.1:8787` → 200 `READY / HG_LOCAL / phone_bridge V2`.
-- health-tunnel: **no process**; supervisor `10459` running; last `GATE_REQUEST` 00:38:59Z.
-- `sshd:8022` **closed**; Termux private storage not reachable via adb.
-- Edge TLS: valid Let's Encrypt cert, IP SAN `160.191.242.198`, expires **2026-10-13**.
-
-## OUTPUT (this run)
-- New evidence: `tests/OUTPUT_runtime_evidence.txt`, `tests/OUTPUT_go_replica_boot.txt`,
-  `tests/OUTPUT_b5b_allow_replica.txt`.
-- New test: `tests/test_b5b_allow_replica.py` → **11/11 PASS** (DENY paths + full ALLOW
-  mechanics + idempotency).
-- Updated `OWNER_RUNBOOK.md` (preflight/backup/rollback/stop; GO service fix via runit;
-  nohup flagged as a canonical deviation).
-
-## ACCEPTANCE CRITERIA
-See `ACCEPTANCE_MATRIX.md`. Runtime PASS requires device/edge evidence; replica ≠ runtime.
+## RESULTS (this run)
+- **B1 PASS (runtime, VPS1):** `go-runtime` active; listener `127.0.0.1:8877`; `/healthz`
+  `{"status":"ok"}`; `/v1/status` Bearer **200** (production, 28 ops); no token **401**;
+  `GO_COMMIT=d635e883…`.
+- **B5-b DENY PASS (runtime, VPS1):** `ToolGovernance.execute(vps1.edge.health)` →
+  `AUTHORITY_PROVENANCE_MISSING` DENIED; production ledger `/opt/go/data/tool-events.jsonl`
+  (1733 lines) contains real phone-originated DENIED events.
+- **B2 FAIL (runtime):** edge `/edge/tunnel/status` → `queue=3, pending=0`;
+  `hg-edge` logs `GATE_TIMEOUT 504`; no `health-tunnel.py` process on the phone.
+- **B4:** TLS valid (Let's Encrypt, IP SAN, `notAfter=2026-10-13T01:54Z`) but **no renewal
+  configured** (certbot absent, no timer); gate auth enforced (401 no token); E2E 200 blocked
+  by the tunnel (+ UI).
+- **B5-b ALLOW BLOCKED (runtime):** `/etc/hg/authority/` absent (no `root.key`); authority env
+  empty; `TRUSTED_APPROVAL_ISSUERS` empty. Must be provisioned by the external owner.
+- Phone GO (separate local deploy) still crash-loops; root-caused (missing governance source).
 
 ## EVIDENCE
-- This directory + `MANIFEST.sha256`; phone evidence under `/sdcard/*.txt` (referenced).
+- `tests/OUTPUT_vps1_runtime.txt` (raw VPS1 captures), `tests/vps1_*_verify.sh` (scripts),
+  plus prior `tests/OUTPUT_*`.
 
 ## RISKS
-- Edge cert expires 2026-10-13 (renewal required for B4 continuity).
-- GO crash loop root cause needs `$PREFIX/var/log/sv/go-runtime/current` (owner read).
-- Custom GPT Actions deprecating → B4 time-bounded; prefer Plugins migration.
+- Edge cert expires 2026-10-13 with no auto-renewal → B4 continuity risk (owner w/ authority).
+- Phone tunnel not draining → B2/B4 blocked.
+- Newer B1–B5 token-file authority design is NOT deployed on VPS1 (older env-provenance) —
+  reconcile before claiming B5-b on the newer contract.
 
 ## STOP CONDITION
-Stop only when all mandatory gates PASS, or each blocker is objectively outside current
-tools/rights with a precise unlock action. No fabricated PASS.
+All mandatory gates PASS, or each remaining blocker objectively outside current rights with a
+precise unlock action. No fabricated PASS.
 
 ## NEXT ACTION
-1. Owner: `tail -n 60 "$PREFIX/var/log/sv/go-runtime/current"`, fix `~/go`/`go.env`, then
-   `sv down/up go-runtime` (one attempt; return logs on failure).
-2. Owner: install hardened supervisor + restore tunnel (B2).
-3. Owner: B4 import + Bearer secret + domain allowlist.
-4. External owner: provision authority root/revocation/issuers/token (B5-b ALLOW).
-5. Deep (when `sshd:8022` opens or loopback GO is up): run B1/B2/B5-a runtime verification;
-   then B5-b DENY; then ALLOW.
+1. Owner (Termux): fix phone GO (redeploy `~/go` with governance files) **and** restore the
+   tunnel (hardened supervisor + edge config) → then Deep verifies B2/B5-a runtime.
+2. Owner (authority): renew the edge certificate (install certbot/acme + timer) before 2026-10-13.
+3. Owner (authority): provision external authority root + approvers → then Deep runs ALLOW E2E.
+4. Owner (ChatGPT): import the action + Bearer secret + domain allowlist → Deep verifies 200.
