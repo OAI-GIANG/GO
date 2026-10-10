@@ -5,6 +5,7 @@ Store remains the persistence owner; Runtime remains the executor;
 Evidence/Replay remain integrity owners.
 """
 from __future__ import annotations
+from ..contract_identity import to_canonical
 
 import hashlib
 import json
@@ -269,7 +270,7 @@ class DurableExecution:
         cid=f"CHK-{uuid.uuid4().hex}"
         ch=getattr(contract,"contract_hash",None) or (contract.get("contract_hash") if isinstance(contract,dict) else None) or (task.get("metadata") or {}).get("_contract_hash")
         if not ch: raise DurableExecutionError("contract_hash_required")
-        cn=getattr(contract,"contract_name","LOVE_TASK_CONTRACT"); cv=getattr(contract,"contract_version","1.0")
+        cn=to_canonical(getattr(contract,"contract_name","HG_TASK_CONTRACT")); cv=getattr(contract,"contract_version","1.0")
         refs=tuple(EvidenceReference(str(e["evidence_id"]),str(e.get("evidence_digest") or e.get("integrity") or ""),str(e.get("verification_status","UNVERIFIED"))) for e in evidence)
         refs_payload=sorted([{"evidence_id":r.evidence_id,"evidence_digest":r.evidence_digest,"verification_status":r.verification_status} for r in refs],key=lambda x:x["evidence_id"])
         manifest=EvidenceManifest(refs,sha256_canonical(refs_payload))

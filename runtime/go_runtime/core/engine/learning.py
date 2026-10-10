@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ..contract_identity import to_canonical
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
@@ -164,7 +165,7 @@ def compute_learning(tasks: list[dict], publications: list[dict], metrics: dict[
     if metrics["tasks_failed"] == 0 and metrics["tasks_completed"] > 0:
         observations.append("observed_task_success_without_failure")
     return {
-        "schema_version": "LOVE-LEARNING-1.0",
+        "schema_version": "HG-LEARNING-1.0",
         "observed_only": True,
         "observations": observations,
         "recommendations": recommendations,
@@ -183,7 +184,7 @@ def build_knowledge_hint(learning: dict[str, Any], metrics: dict[str, Any]) -> d
     observations = [str(x) for x in (learning.get("observations") or [])][:8]
     recommendations = [str(x) for x in (learning.get("recommendations") or [])][:4]
     return {
-        "schema_version": "LOVE-KNOWLEDGE-HINT-1.0",
+        "schema_version": "HG-KNOWLEDGE-HINT-1.0",
         "observed_only": True,
         "authority": "none",
         "observations": observations,

@@ -23,6 +23,10 @@ from runtime.go_kernel import GateResult
 VERSION = "0.1.1"
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DATA = ROOT / "runtime" / "data" / "go_runtime.sqlite3"
+# HG canonical bind port. 8787 is the LEGACY port refused by go-tunnel-client.mjs;
+# control/GO_RUNTIME_DEPLOYMENT_V1.md documents 127.0.0.1:8877.
+DEFAULT_PORT = 8877
+LEGACY_PORT = 8787
 
 def utc_now() -> str: return datetime.now(timezone.utc).isoformat()
 def env_bool(name: str, default: bool = False) -> bool:
@@ -30,12 +34,16 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 class RuntimeConfig:
     def __init__(self) -> None:
-        self.host=os.getenv("GO_HOST","127.0.0.1"); self.port=int(os.getenv("GO_PORT","8787"))
+        self.host=os.getenv("GO_HOST","127.0.0.1"); self.port=int(os.getenv("GO_PORT",str(DEFAULT_PORT)))
         self.api_token=os.getenv("GO_API_TOKEN",""); self.allow_anonymous=env_bool("GO_ALLOW_ANONYMOUS",False)
         self.data_path=Path(os.getenv("GO_DATA",str(DEFAULT_DATA))).resolve(); self.commit=os.getenv("GO_COMMIT","unknown")
         self.tree=os.getenv("GO_TREE_SHA","unknown"); self.environment=os.getenv("GO_ENV","local")
     def validate(self) -> None:
         if self.port<0 or self.port>65535: raise ValueError("GO_PORT must be 0..65535")
+        if self.port==LEGACY_PORT and not env_bool("GO_ALLOW_LEGACY_PORT",False):
+            raise ValueError("GO_PORT 8787 is the legacy port that the HG tunnel refuses; use 8877 or set GO_ALLOW_LEGACY_PORT=1")
+        if self.data_path.exists() and self.data_path.is_dir():
+            raise ValueError("GO_DATA must be a FILE path (e.g. .../go_runtime.sqlite3), not a directory")
         if not self.allow_anonymous and not self.api_token: raise ValueError("GO_API_TOKEN is required unless anonymous mode is explicitly enabled")
 
 class GOApplication:
