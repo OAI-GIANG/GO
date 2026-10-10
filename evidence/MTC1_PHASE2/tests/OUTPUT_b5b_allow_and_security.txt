@@ -1,0 +1,32 @@
+MTC-1.0 Phase 2 — B5-b ALLOW attempt + security remediation — 2026-10-10T11:24Z
+Host: VPS1 vps-hjcscw (root SSH)
+
+== B5-b ALLOW E2E with the OWNER-PROVISIONED authority (not self-created) ==
+Loaded the service EnvironmentFile (/etc/go/go-runtime.env) so the run used the deployed
+authority configuration:
+  authority configured: provenance_set=yes  expected_match=yes  subject_prefix=HG_SESSION_
+Canonical call: ToolGovernance.execute("HG-TOOLPLANE","vps1.edge.health",{},call_id=CALL-MTC1-ALLOW-1)
+  -> {"error": "AuthorityError: AUTHORITY_ROOT_NOT_EXTERNAL"}
+  -> ledger states: ACCEPTED, VALIDATED, AUTHORIZATION_PENDING (then denied at authority issuance)
+Confirmed deployed code (VPS1):
+  ToolGovernance._authority -> AuthorityRoot.instance().issue(...)
+  AuthorityRoot._load -> opens HG_AUTHORITY_ROOT_KEY_FILE (default /etc/hg/authority/root.key);
+      absent => provenance "SELF_PROVISIONED"
+  AuthorityRoot.issue -> _require_external() -> raises AUTHORITY_ROOT_NOT_EXTERNAL for SELF_PROVISIONED
+Facts:
+  /etc/hg/authority/  -> does not exist (no root.key)
+  /etc/go/go-runtime.env has HG_TOOL_AUTHORITY_PROVENANCE == ..._EXPECTED and
+      HG_TOOL_AUTHORITY_SUBJECT=HG_SESSION_* (owner-provisioned)
+=> B5-b ALLOW BLOCKED: needs an EXTERNAL authority root key. Deep must not create it.
+   (DENY evidence retained separately: AUTHORITY_PROVENANCE_MISSING when env absent.)
+
+== Security: GO_API_TOKEN exposure remediated ==
+A review command printed the GO_API_TOKEN value by mistake. Remedy performed:
+  - replaced GO_API_TOKEN in /etc/go/go-runtime.env with a fresh 32-byte hex secret (value not printed)
+    backup: /etc/go/go-runtime.env.bak-20261010T112425Z (mode 600)
+  - systemctl restart go-runtime
+  - verify: healthz 200 ; status(new token) 200 ; status(no token) 401 ;
+            status(exposed old token) 401  => the exposed value is now invalid.
+Consumers of GO_API_TOKEN are contained to /opt/go (server.py) and read the file at call time,
+so no other component needed updating. Provenance/subject labels were also displayed; they are
+configuration strings (not credentials) — recommend reviewing/rotating provenance if desired.

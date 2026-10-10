@@ -1,45 +1,36 @@
 # MTC-1.0 Phase 2 — Execution Checkpoint
 
-- Updated: 2026-10-10T11:15Z
+- Updated: 2026-10-10T11:26Z
 - Branch: `feature/stt-b1-b5-reconciliation-20261010`
-- Base HEAD before this commit: `d3b56bff5fe62d7fb594b89260067490af52c7cc`
-- Overall status: **INCOMPLETE**
+- Base HEAD before this commit: `ffbed84b068326823e75d22207b1306d6cbc82ac`
+- Overall status: **INCOMPLETE** (only one REQUIRED gate blocked)
 
-## OBJECTIVE
-Close the remaining mandatory acceptance gates of HG MTC-1.0 Phase 2 with implementation,
-runtime verification, E2E tests and independently checkable evidence.
+## Scope decision
+- GPT / ChatGPT Action (B4) = **OUT_OF_SCOPE** (owner decision) — not checked, not required.
+- Phone-local GO = **OUT_OF_SCOPE** (not a dependency; `go_health` targets VPS1).
 
-## RESULTS (this run — real fixes, not plans)
-- **B2 PASS (runtime).** Root cause: supervisor spawned `python3 /sdcard/HG-GO-DEPLOY/
-  health-tunnel.py` **without `--apply`** and without `HG_EDGE_*`, so the tunnel printed
-  `DRY_RUN_OK` and exited → restart loop → edge `GATE_TIMEOUT 504`. Fix: replaced that file
-  with a self-configuring, apply-by-default build (backup `health-tunnel.py.bak-20261010T110939Z`).
-  Result: single tunnel `pid 2773` stable (4 samples/30s), edge `queue=0`, gate round-trip 200,
-  phone evidence `GATE_REQUEST status:200 @11:10:53Z`.
-- **B4 server-side PASS + TLS renewal.** Gate Bearer → HTTP 200 (`HG_TUNNEL_HEALTH`, py 3.14.6,
-  aarch64) with device-side evidence; no token → 401. TLS renewed (2026-10-13 → **2026-10-17**)
-  after adding the ACME webroot location (nginx backup `hg-edge.bak-20261010T110157Z`);
-  `certbot-renew.timer` enabled (twice daily). Remaining B4: ChatGPT editor import (owner).
-- **B1 PASS (runtime, VPS1)** and **B5-b DENY PASS (runtime, VPS1)** retained.
+## Gate classification (see PHASE2_GATE_CLASSIFICATION.md)
+- REQUIRED PASS (runtime): B1 (VPS1), B2, TLS renewal, B5-a canonical (deny/fail-closed/ledger),
+  B5-b DENY, evidence/manifest.
+- REQUIRED BLOCKED: **B5-b ALLOW** — external authority root not provisioned
+  (`/etc/hg/authority/root.key` absent ⇒ `AUTHORITY_ROOT_NOT_EXTERNAL`).
+- CONDITIONAL BLOCKED: B5-a phone toolplane hash-chain (needs Termux).
 
-## ACCESS
-- root SSH → VPS1 (`vps-hjcscw`) works.
-- `adb` read-only **+ write to `/sdcard`** works (used to fix the tunnel artifact live).
-- Termux shell NOT available: `sshd:8022` closed; `RUN_COMMAND` denies the shell uid (verified).
-- VPS2 not reachable with available keys.
+## This run
+- Confirmed deployed governance is the V2 `AuthorityRoot` consumer: with the owner-provisioned
+  env (`HG_TOOL_AUTHORITY_PROVENANCE == …_EXPECTED`, `HG_TOOL_AUTHORITY_SUBJECT=HG_SESSION_*`),
+  `issue()` raises `AUTHORITY_ROOT_NOT_EXTERNAL` because the external root key is absent.
+  Evidence: `tests/OUTPUT_b5b_allow_and_security.txt`.
+- **Security remediation:** an erroneous review command printed `GO_API_TOKEN`; it was rotated
+  (`/etc/go/go-runtime.env`, backup `…bak-20261010T112425Z`, mode 600), service restarted.
+  Verified: healthz 200; new token 200; no token 401; **exposed old token 401**.
 
-## REMAINING (blocked, exact owner action in OWNER_RUNBOOK.md)
-- **B4 UI import** (ChatGPT editor + Bearer secret + domain allowlist) — owner.
-- **B5-b ALLOW** — external authority root/issuers absent (`/etc/hg/authority/` missing).
-- **B5-a phone audit runtime** — needs Termux (toolplane audit is private).
-- **phone-local GO** — crash-loop (missing governance source); not required for B1.
+## Interaction with prior findings
+- The earlier `AUTHORITY_PROVENANCE_MISSING` DENY was because the ad-hoc shell lacked the
+  service env; with the env loaded the blocker is `AUTHORITY_ROOT_NOT_EXTERNAL` — consistent
+  with the mandate.
 
-## RISKS
-- The deployed tunnel patch self-configures/apply-defaults; prefer also installing the
-  hardened supervisor so behavior is explicit in the canonical file.
-- Verify no duplicate tunnel if the supervisor is later changed.
-
-## NEXT ACTION
-1. Owner (ChatGPT): import the OpenAPI, set Bearer secret, allowlist domain, run Test → 200.
-2. External authority: provision root + revocation + approval issuers → Deep runs ALLOW E2E.
-3. If phone GO is required: redeploy `~/go` including `control/` governance files.
+## Next action (minimal, external)
+Provision an external authority root key at `/etc/hg/authority/root.key` (mode 600, owned by a
+principal other than the runtime). Deep will then run the ALLOW E2E and verify COMPLETED +
+witness + ledger `STARTED→COMPLETED`. Deep will not create the key.
