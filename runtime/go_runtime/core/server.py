@@ -238,6 +238,7 @@ class GOApplication:
         if not operation: raise ValueError("operation is required")
         if not isinstance(payload,dict): raise ValueError("payload must be an object")
         if len(idem)>200: raise ValueError("idempotency_key too long")
+        approval=self._deserialize_approval(body.get("approval"))  # strict, before any task side effect
         contract=TaskContract(goal=operation,metadata={"operation":operation,"payload":payload}).validate()
         submission=contract.submit(submission_id=task_id,idempotency_key=idem,execution_mode="SYNC")
         task,reused=self.durable.enqueue_submission(submission)
@@ -249,7 +250,6 @@ class GOApplication:
         operation=str(metadata.get("operation") or operation); payload=dict(metadata.get("payload") or payload)
         try:
             tool_names=set(self.tools._tools)
-            approval=self._deserialize_approval(body.get("approval"))
             if operation=="objective.run":
                 result=self.run_objective(task_id,payload,approval=approval)
             elif operation in tool_names:

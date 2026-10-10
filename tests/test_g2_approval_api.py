@@ -279,3 +279,54 @@ def test_g2_integration_replayed_nonce_denied(tmp_path, monkeypatch):
     assert r1.ok is True
     r2 = gov.execute("t", "g2.delete", {}, approval=appr, call_id="CALL-AP-R2")
     assert r2.ok is False and r2.output["error"] == "APPROVAL_REPLAY_DETECTED"
+
+
+def test_g2_integration_nonce_reservation_is_durable_across_instances(tmp_path, monkeypatch):
+    """Replay protection survives a fresh governance instance (durable reservation)."""
+    _setup_auth(tmp_path, monkeypatch)
+    gov, tool = _gov(tmp_path)
+    appr = _bound_approval(monkeypatch)
+    assert gov.execute("t", "g2.delete", {}, approval=appr, call_id="CALL-DUR-1").ok is True
+    ledger_path = tmp_path / "ev.jsonl"
+    from runtime.go_runtime.core.tool_governance import ToolGovernance
+    from runtime.go_runtime.core.tool_runtime import ToolRegistry
+    tool2 = _DestructiveTool(); reg2 = ToolRegistry(); reg2.register(tool2.as_adapter())
+    gov2 = ToolGovernance(reg2, ledger_path)
+    r = gov2.execute("t", "g2.delete", {}, approval=appr, call_id="CALL-DUR-2")
+    assert r.ok is False and r.output["error"] == "APPROVAL_REPLAY_DETECTED" and tool2.called is False
+
+
+def test_g2_integration_concurrent_nonce_single_execution(tmp_path, monkeypatch):
+    """Concurrency oracle: at most one request crosses the destructive boundary per nonce."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    _setup_auth(tmp_path, monkeypatch)
+    gov, tool = _gov(tmp_path)
+    appr = _bound_approval(monkeypatch)
+    barrier = threading.Barrier(8)
+
+    def call(i):
+        barrier.wait()
+        r = gov.execute("t", "g2.delete", {}, approval=appr, call_id="CALL-CONC-%d" % i)
+        return r.ok, r.output.get("error")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(call, range(8)))
+    wins = [r for r in results if r[0] is True]
+    losses = [r for r in results if r[0] is False]
+    assert len(wins) == 1, results
+    assert tool.called is True
+    assert len(losses) == 7 and all(e == "APPROVAL_REPLAY_DETECTED" for _, e in losses), results
+
+
+def test_g2_integration_nonce_store_failure_fails_closed(tmp_path, monkeypatch):
+    _setup_auth(tmp_path, monkeypatch)
+    gov, tool = _gov(tmp_path)
+    appr = _bound_approval(monkeypatch)
+
+    def _boom(*a, **k):
+        raise OSError("simulated nonce-store failure")
+
+    monkeypatch.setattr(gov.ledger, "reserve_nonce", _boom)
+    r = gov.execute("t", "g2.delete", {}, approval=appr, call_id="CALL-STORE-FAIL")
+    assert r.ok is False and r.output["error"] == "APPROVAL_NONCE_STORE_UNAVAILABLE" and tool.called is False

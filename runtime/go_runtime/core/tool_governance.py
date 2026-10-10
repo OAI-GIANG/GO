@@ -66,6 +66,26 @@ class ToolEventLedger:
     def append(self,event):
         with self.lock:
             with self.path.open("a",encoding="utf-8") as f: f.write(json.dumps(event,ensure_ascii=False,sort_keys=True)+"\n")
+    def nonce_dir(self)->Path:
+        return self.path.parent / (self.path.name + ".nonces")
+    def reserve_nonce(self,nonce:str,*,task_id:str,tool_name:str)->bool:
+        """Atomically and durably reserve a single-use approval nonce.
+
+        Uses O_CREAT|O_EXCL on a per-nonce marker file (atomic on a local
+        filesystem, survives restart). Returns True if reserved by this caller,
+        False if the nonce was already consumed. Any other storage error raises
+        OSError so the caller can fail closed.
+        """
+        d=self.nonce_dir(); d.mkdir(parents=True,exist_ok=True)
+        digest=hashlib.sha256(str(nonce).encode()).hexdigest()
+        marker=d/(digest+".nonce")
+        fd=os.open(str(marker),os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
+        try:
+            os.write(fd,json.dumps({"nonce_sha256":digest,"task_id":task_id,"tool_name":tool_name,"reserved_at":_now()},sort_keys=True).encode())
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        return True
 
 class ToolGovernance:
     def __init__(self,registry:ToolRegistry, ledger_path:Path|None=None):
@@ -139,10 +159,20 @@ class ToolGovernance:
             if not valid:
                 return self._result(cid,name,False,{"error":reason},
                     {"call_id":cid,"tool_name":name,"task_id":task_id,"status":"DENIED","arguments_digest":arg_digest,"contract_version":"TOOL-GOVERNANCE-V1"})
-            approval_claims = {"approval_id": approval.approval_id, "nonce": approval.nonce, "approver_id": approval.approver_id}
-            if any(e.get("approval_nonce") == approval.nonce for e in self.ledger._read()):
+            # Atomic, durable single-use nonce consumption (prevents replay races).
+            try:
+                reserved = self.ledger.reserve_nonce(approval.nonce, task_id=task_id, tool_name=name)
+            except FileExistsError:
+                reserved = False
+            except OSError:
+                reserved = None
+            if reserved is None:
+                return self._result(cid,name,False,{"error":"APPROVAL_NONCE_STORE_UNAVAILABLE"},
+                    {"call_id":cid,"tool_name":name,"task_id":task_id,"status":"DENIED","arguments_digest":arg_digest,"contract_version":"TOOL-GOVERNANCE-V1"})
+            if not reserved:
                 return self._result(cid,name,False,{"error":"APPROVAL_REPLAY_DETECTED"},
                     {"call_id":cid,"tool_name":name,"task_id":task_id,"status":"DENIED","arguments_digest":arg_digest,"contract_version":"TOOL-GOVERNANCE-V1"})
+            approval_claims = {"approval_id": approval.approval_id, "nonce": approval.nonce, "approver_id": approval.approver_id}
         # Cached results are never returned before current authorization. Destructive approvals are single-use.
         if prior and prior.get("state") in TERMINAL and "output" in prior:
             if spec.destructive:
