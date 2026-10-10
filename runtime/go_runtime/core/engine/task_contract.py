@@ -1,4 +1,4 @@
-"""Canonical task-intent and submission contracts for LOVE.
+"""Canonical task-intent and submission contracts for HG.
 
 TaskContract owns immutable intent only. Submission represents one submitted
 instance of that intent. Neither contract owns governance authority or runtime
@@ -13,6 +13,7 @@ from typing import Any, Mapping
 from types import MappingProxyType
 
 from ..checkpoint import canonical_json
+from ..contract_identity import normalize_identity_fields
 
 
 class TaskContractError(ValueError):
@@ -42,7 +43,7 @@ class TaskContract:
 
     def canonical_payload(self) -> dict[str, Any]:
         self.validate()
-        return {"schema_version":"LOVE-TASK-CONTRACT-1.0","contract_name":"LOVE_TASK_CONTRACT","contract_version":"1.0","goal":self.goal,"metadata":dict(self.metadata)}
+        return {"schema_version":"HG-TASK-CONTRACT-1.0","contract_name":"HG_TASK_CONTRACT","contract_version":"1.0","goal":self.goal,"metadata":dict(self.metadata)}
 
     @property
     def contract_hash(self) -> str:
@@ -59,7 +60,7 @@ class TaskContract:
         metadata: Mapping[str, Any] | None = None,
     ) -> "Submission":
         self.validate()
-        submission_metadata={**self.metadata,**dict(metadata or {}),"_contract_name":"LOVE_TASK_CONTRACT","_contract_version":"1.0","_contract_hash":self.contract_hash}
+        submission_metadata={**self.metadata,**dict(metadata or {}),"_contract_name":"HG_TASK_CONTRACT","_contract_version":"1.0","_contract_hash":self.contract_hash}
         return Submission(
             submission_id=submission_id, goal=self.goal, idempotency_key=idempotency_key,
             idempotency_scope=idempotency_scope, delay_s=delay_s, execution_mode=execution_mode,
@@ -106,7 +107,7 @@ class Submission:
     def to_dict(self) -> dict[str, Any]:
         self.validate()
         return {
-            "schema_version": "LOVE-SUBMISSION-1.0",
+            "schema_version": "HG-SUBMISSION-1.0",
             "id": self.submission_id,
             "goal": self.goal,
             "idempotency_key": self.idempotency_key,

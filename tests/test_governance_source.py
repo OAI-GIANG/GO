@@ -67,7 +67,7 @@ class GovernanceSourceBindingTests(unittest.TestCase):
             binding = json.loads((ROOT / "control" / "MASTER_GOVERNANCE_RULESET_V1_APPROVAL_BINDING.json").read_text(encoding="utf-8"))
             binding["source_sha256"] = "0" * 64
             (root / "control" / "MASTER_GOVERNANCE_RULESET_V1_APPROVAL_BINDING.json").write_text(json.dumps(binding), encoding="utf-8")
-            with self.assertRaisesRegex(GovernanceSourceError, "BINDING_HASH_MISMATCH"):
+            with self.assertRaisesRegex(GovernanceSourceError, "BINDING_INTEGRITY_MISMATCH"):
                 verify_governance_source(root)
 
     def test_tool_governance_fails_before_ledger_or_adapter(self):
