@@ -22,8 +22,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.*;
 import org.json.*;
-import javax.net.ssl.SSLSocketFactory;
-import javax.net.ssl.SSLSocket;
 
 public class MainActivity extends Activity {
     SharedPreferences prefs; EditText server, pairing; TextView status; WebView web; Button connect;
