@@ -51,16 +51,10 @@ public class MainActivity extends Activity {
             JSONObject body=new JSONObject(); body.put("pairing_token",pair); body.put("device_id",deviceId); body.put("name","HG Phone"); body.put("platform","android"); body.put("capabilities",new JSONArray(Arrays.asList("ping","device_info","termux_command")));
             JSONObject r=post(base+"/api/phone/register",body); token=r.getString("device_token"); prefs.edit().putString("device_token",token).apply(); main.post(()->pairing.setText(""));
         }
-        ui("Đã đăng ký • mở HG…"); openWeb(base); running=true; startWs(base,token);
+        ui("Đã đăng ký • mở HG…"); openWeb(base); running=true; startLongPoll(base,token);
     }catch(Exception e){ui("Kết nối lỗi: "+e.getMessage());}}
     void openWeb(String base){main.post(()->{web.setVisibility(View.VISIBLE); web.loadUrl(base+"/"); connect.setVisibility(View.GONE); server.setVisibility(View.GONE); pairing.setVisibility(View.GONE);});}
     JSONObject post(String url, JSONObject body)throws Exception{HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection(); c.setRequestMethod("POST"); c.setConnectTimeout(10000); c.setReadTimeout(15000); c.setDoOutput(true); c.setRequestProperty("Content-Type","application/json"); try(OutputStream o=c.getOutputStream()){o.write(body.toString().getBytes(StandardCharsets.UTF_8));} int code=c.getResponseCode(); InputStream in=code<400?c.getInputStream():c.getErrorStream(); String text=new String(in.readAllBytes(),StandardCharsets.UTF_8); if(code>=400)throw new Exception(text); return new JSONObject(text);}
-    void startWs(String base,String token){new Thread(()->{long backoff=1000; while(running){try{
-        URI u=URI.create(base.replaceFirst("^http","ws")+"/v1/phone/ws?device_id="+URLEncoder.encode(deviceId,"UTF-8")); String host=u.getHost(); int port=u.getPort()>0?u.getPort():(u.getScheme().equals("wss")?443:80);
-        if(!u.getScheme().equals("wss")) throw new Exception("PHONE_AGENT_REQUIRES_WSS");
-        ws=u.getScheme().equals("wss") ? SSLSocketFactory.getDefault().createSocket(host,port) : new Socket(host,port); if(ws instanceof SSLSocket) ((SSLSocket)ws).getSSLParameters().setEndpointIdentificationAlgorithm("HTTPS"); ws.setSoTimeout(25000); OutputStream out=ws.getOutputStream(); InputStream in=ws.getInputStream(); String key=Base64.getEncoder().encodeToString(randomBytes(16)); String req="GET "+u.getRawPath()+"?"+u.getRawQuery()+" HTTP/1.1\r\nHost: "+host+":"+port+"\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: "+key+"\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer "+token+"\r\n\r\n"; out.write(req.getBytes(StandardCharsets.US_ASCII)); out.flush(); readHandshake(in); ui("HG Phone Bridge: CONNECTED"); sendText(out,"{\"type\":\"heartbeat\"}"); backoff=1000;
-        long last=System.currentTimeMillis(); while(running&&!ws.isClosed()){try{Frame f=readFrame(in); if(f==null)break; if(f.opcode==1)handleMessage(out,new String(f.data,StandardCharsets.UTF_8)); else if(f.opcode==9)sendFrame(out,(byte)10,f.data);}catch(SocketTimeoutException e){if(System.currentTimeMillis()-last>15000){sendText(out,"{\"type\":\"heartbeat\"}");last=System.currentTimeMillis();}}}
-    }catch(Exception e){ui("Phone Bridge: "+e.getMessage());} finally {try{if(ws!=null)ws.close();}catch(Exception ignored){}} if(running){try{Thread.sleep(backoff);}catch(InterruptedException ignored){Thread.currentThread().interrupt();break;} backoff=Math.min(backoff*2,30000);}}}).start();}
     void handleMessage(OutputStream out,String text)throws Exception{JSONObject m=new JSONObject(text); if("hello".equals(m.optString("type"))){sendText(out,"{\"type\":\"heartbeat\"}");return;} if("command".equals(m.optString("type"))){String id=m.optString("id");JSONObject c=m.optJSONObject("command");JSONObject result=new JSONObject(); result.put("ok",true); String type=c==null?"":c.optString("type"); if("ping".equals(type))result.put("pong",true); else if("device_info".equals(type)){result.put("device_id",deviceId);result.put("model",android.os.Build.MODEL);result.put("android",android.os.Build.VERSION.RELEASE);} else if("termux_command".equals(type)){String path=c.optString("path"); if(!"/data/data/com.termux/files/home/hg-agent/dispatch.sh".equals(path)){result.put("ok",false);result.put("error","CAPABILITY_DENIED");} else {JSONArray a=c.optJSONArray("args"); String[] args=new String[a==null?0:a.length()]; for(int i=0;i<args.length;i++)args[i]=a.optString(i); String rid=TermuxRunner.run(this,path,args); result.put("accepted",true); result.put("termux_request_id",rid); watchTermuxResult(out,id,rid);}} else {result.put("ok",false);result.put("error","UNSUPPORTED_COMMAND");} JSONObject r=new JSONObject();r.put("type","result");r.put("id",id);r.put("kind","phone.command.result");r.put("result",result);sendText(out,r.toString());}}
     void watchTermuxResult(OutputStream out,String commandId,String requestId){new Thread(()->{long deadline=System.currentTimeMillis()+60000; while(System.currentTimeMillis()<deadline){TermuxResultCache.Result tr=TermuxResultCache.take(requestId); if(tr!=null){try{JSONObject result=new JSONObject(); result.put("ok",tr.exitCode==0); result.put("exit_code",tr.exitCode); result.put("stdout_digest",sha256(tr.stdout==null?"":tr.stdout)); result.put("stderr_digest",sha256(tr.stderr==null?"":tr.stderr)); JSONObject r=new JSONObject(); r.put("type","result"); r.put("id",commandId); r.put("kind","phone.command.result"); r.put("result",result); synchronized(out){sendText(out,r.toString());} }catch(Exception ignored){} return;} try{Thread.sleep(250);}catch(InterruptedException e){Thread.currentThread().interrupt();return;}}} ).start();}
     String sha256(String s)throws Exception{MessageDigest d=MessageDigest.getInstance("SHA-256"); byte[] b=d.digest(s.getBytes(StandardCharsets.UTF_8)); StringBuilder h=new StringBuilder(); for(byte x:b)h.append(String.format("%02x",x)); return h.toString();}
@@ -71,4 +65,23 @@ public class MainActivity extends Activity {
     Frame readFrame(InputStream in)throws Exception{int a=in.read(),b=in.read();if(a<0||b<0)return null;int op=a&15;int n=b&127;if(n==126)n=(in.read()<<8)|in.read();else if(n==127){n=0;for(int i=0;i<8;i++)n=(n<<8)|in.read();}boolean masked=(b&128)!=0;byte[] mask=masked?in.readNBytes(4):new byte[0];byte[] d=in.readNBytes(n);if(masked)for(int i=0;i<n;i++)d[i]^=mask[i%4];return new Frame(op,d);}
     static class Frame{int opcode;byte[] data;Frame(int o,byte[]d){opcode=o;data=d;}}
     @Override protected void onDestroy(){running=false;try{if(ws!=null)ws.close();}catch(Exception ignored){}super.onDestroy();}
+
+    // ---- LONGPOLL_HTTPS_V2: thay hoàn toàn luồng WSS của V1 ----
+    LongPollClient poller;
+    void startLongPoll(final String base, final String token){
+        poller = new LongPollClient(base, token, (capability, params) -> {
+            JSONObject req = new JSONObject();
+            req.put("request_id", params.optString("request_id", ""));
+            req.put("capability", capability);
+            req.put("params", params);
+            JSONObject r = TermuxDispatch.dispatch(this, req, 60000L);
+            return r.optJSONObject("result") != null ? r.getJSONObject("result") : r;
+        });
+        new Thread(() -> poller.runLoop()).start();
+    }
+    @Override protected void onDestroy(){
+        super.onDestroy();
+        running = false;
+        if (poller != null) poller.stop();
+    }
 }
