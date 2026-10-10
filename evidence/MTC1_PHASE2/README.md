@@ -29,3 +29,9 @@ and it clearly separates `code-level / unit / replica` evidence from `runtime` e
   this environment. The real counterparts are mapped in `ACCEPTANCE_MATRIX.md`.
 - No token/credential/private key value is stored anywhere in this directory.
 - Historical evidence was NOT overwritten.
+- Independent verification: clone with LF line endings and run the artifact check:
+  `git -c core.autocrlf=false clone --branch feature/stt-b1-b5-reconciliation-20261010 https://github.com/OAI-GIANG/GO.git`
+  then `bash evidence/MTC1_PHASE2/verify_artifacts.sh` (regenerates the manifest and
+  re-checks the governance patch). Default Windows `core.autocrlf=true` rewrites endings on
+  checkout and will make `sha256sum -c MANIFEST.sha256` mismatch — that is a checkout
+  artifact, not a content change.
