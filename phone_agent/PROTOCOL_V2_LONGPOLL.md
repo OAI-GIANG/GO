@@ -11,3 +11,17 @@
 
 Bất biến: pairing token allowlist · device token HMAC có hạn · capability allowlist · tương quan request_id · **chặn replay kết quả** · audit hash-chain.
 **Client Android phải sửa tương ứng** (MainActivity: bỏ WS, thay bằng vòng long-poll) — chưa thực hiện, ghi rõ là việc còn lại.
+
+## HTTP status & lỗi (khớp `phone_agent_http.STATUS`)
+| Điều kiện | HTTP | error.code |
+|---|---|---|
+| Pairing token sai | **403** | `PAIRING_DENIED` |
+| Thiếu/sai device token | **401** | `TOKEN_INVALID` |
+| Device token hết hạn | **401** | `TOKEN_EXPIRED` |
+| Capability không nằm allowlist | **400** | `CAPABILITY_DENIED` |
+| `params.path` thoát sandbox | **400** | `PATH_REJECTED` |
+| Body/JSON sai | **400** | `INVALID_JSON` / `INVALID_REGISTER` |
+| `request_id` không khớp device/không tồn tại | **409** | `REQUEST_MISMATCH` |
+| Gửi lại kết quả cho request đã kết thúc | **409** | `REPLAY_REJECTED` |
+| Enqueue không có `X-Internal-Key` | **403** | `INTERNAL_FORBIDDEN` |
+| Body quá lớn (>256KiB) | **413** | `BODY_TOO_LARGE` |
