@@ -41,4 +41,12 @@ witness + ledger `STARTED→COMPLETED`. Deep will not create the key.
   key verification. Details: `HANDOVER.md`, `tests/OUTPUT_handover_inventory.txt`.
 - Owner actions (Android): `ssh -i ~/.ssh/love_admin_ed25519 root@160.191.242.198` and
   `… root@36.50.135.233`; then disconnect/reconnect and view service status.
-- `ANDROID_HANDOVER_COMPLETED = FALSE` (VPS2 live owner login pending).
+- **UPDATE 2026-10-10T11:37Z:** VPS2 live owner login VERIFIED (`auth.log` `d9Tz` from the phone
+  at 11:35:42Z); VPS2 sshd hardened (`PermitRootLogin without-password`, `PasswordAuthentication no`,
+  00- drop-in); fresh key login OK. VPS1 login evidenced historically. Details: `HANDOVER.md`,
+  `tests/OUTPUT_vps2_hardening.txt`.
+
+## Completion flags
+- `PHASE2_COMPLETED = FALSE` — B5-b ALLOW REQUIRED still BLOCKED (`/etc/hg/authority/root.key` absent).
+- `ANDROID_HANDOVER_COMPLETED = TRUE` — owner phone key logged into both VPS1 (2026-10-09) and
+  VPS2 (2026-10-10T11:35:42Z); root admin verified; owner controls the key; provider-console recovery.

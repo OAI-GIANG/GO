@@ -1,68 +1,48 @@
 # MISSION B — VPS1/VPS2 Android Owner Handover
 
-Status: **SETUP COMPLETE for both VPS; LIVE OWNER LOGIN VERIFIED for VPS1 (historical),
-PENDING for VPS2.** No secret values are stored here.
+Status: **VPS1 verified (historical) · VPS2 verified (live) + hardened.**
+`ANDROID_HANDOVER_COMPLETED = TRUE` (evidence below). No secret values stored here.
 
-## Credential / access inventory (measured 2026-10-10T11:31Z)
+## Credential / access inventory (2026-10-10)
 
 | Item | VPS1 `160.191.242.198` (vps-hjcscw) | VPS2 `36.50.135.233` (vps-5ku1ry) |
 |---|---|---|
 | SSH port | 22 | 22 |
-| Root login | `PermitRootLogin without-password` | `PermitRootLogin yes` |
-| Password auth | `no` | **`yes`** (hardening item) |
-| Pubkey auth | yes | yes |
-| AllowUsers | `root loveadmin stt-exec` | (default) |
+| Root login | `PermitRootLogin without-password` | `PermitRootLogin without-password` (hardened) |
+| Password auth | `no` | **`no`** (hardened 2026-10-10) |
 | Admin users | `root`, `loveadmin` (NOPASSWD sudo) | `root` |
-| Owner phone key (fp `SHA256:d9Tz…`, comment `love-admin@localhost-20260928`) | **authorized on root** (and historical logins) | **authorized today** (added) |
-| Other root keys | `go2LJ…` (love-admin@vps-000071), `9iiP…` (love-production), `xU04…` (LAPTOP-E9FGVI95) | `+ADgN…` (root@vps-hjcscw) + owner key |
-| Host keys | DSA + RSA (provider image; no ed25519 host key — hardening item) | (ed25519 .pub absent; provider image) |
-| Reachability from workstation | direct | only via VPS1 jump (`hg_vps2_ed25519`) |
+| Owner phone key `SHA256:d9Tz…` | authorized on root; **5 logins 2026-10-09/10** | authorized; **login 2026-10-10T11:35:42Z** |
+| Other root keys | `go2LJ…`, `9iiP…`, `xU04…` (Deep) | `+ADgN…` (VPS1 jump) + owner key |
+| Reachability | direct | via VPS1 jump (Deep) / direct (owner) |
 
-### Key attribution evidence
-- The owner key fingerprint `SHA256:d9Tz+WxSL8FuCLp0y2tlq2fYiyUKhDhDVp6S1dKxOcU` is on the
-  **phone** (`~/.ssh/love_admin_ed25519.pub`, comment `love-admin@localhost-20260928`).
-- The **workstation does not hold** `d9Tz` (its keys are `go2LJ…`, `xU04…`, `9iiP…`, `EOEJ…`, `Z9Ht…`).
-- VPS1 `/var/log/auth.log` shows **5 accepted root logins using `d9Tz`** on 2026-10-09
-  (23:00, 23:43, 23:52) and 2026-10-10T00:11 from `171.255.245.247` (the shared home NAT IP).
-  => Owner Android → VPS1 root login demonstrated (VPS1 = `OWNER_ANDROID_ACCESS` historical).
+### Verification evidence
+- **VPS2 live login:** `/var/log/auth.log` → `Accepted publickey for root from 171.255.245.247 …
+  SHA256:d9Tz…` at 2026-10-10T11:35:42Z. The workstation holds no `d9Tz` key and reaches VPS2
+  only via the VPS1 jump (source `160.191.242.198`), so this login came from the **phone**.
+- **VPS1 login:** same key, 5 accepted logins on 2026-10-09 (23:00/23:43/23:52) and 2026-10-10T00:11.
+- Hardening verified: fresh key login `KEYLOGIN_OK` after `PasswordAuthentication no`.
 
-## Owner actions (minimal, on the Android phone / Termux)
-
-VPS1:
-```sh
-ssh -i ~/.ssh/love_admin_ed25519 root@160.191.242.198 'hostname; id'
-```
-VPS2:
-```sh
-ssh -i ~/.ssh/love_admin_ed25519 root@36.50.135.233 'hostname; id'
-```
-Both hosts are already in the phone's `~/.ssh/known_hosts`. Then **disconnect and reconnect**
-once, and view service state/logs, e.g. `systemctl is-active go-runtime hg-edge; journalctl -n 5`.
-
-## Recovery & independence
-- Private key lives only on the phone (`~/.ssh/love_admin_ed25519`); back it up to an encrypted
-  store the owner controls. Keep the phone screen-lock/biometrics enabled.
-- Out-of-band break-glass: the VPS provider control panel (independent of SSH).
-- No chat pasting of keys. Use `ssh-keygen -y` to re-derive a public key if needed.
-- Deep holds no exclusively-owned credential required for owner access: the owner key is the
-  owner's; Deep's key (`xU04…`) is a separate admin credential.
-
-## Hardening (after owner verifies VPS2 key — do NOT lock out first)
-- VPS2: set `PermitRootLogin prohibit-password` and `PasswordAuthentication no` (per
-  `sshd_config(5)`: `prohibit-password` disables password for root). Backup `sshd_config`,
-  `sshd -t`, reload; keep an existing session open while testing.
-- Remove legacy DSA host key / generate ed25519 host key (optional, medium risk).
+## Hardening applied (VPS2)
+- Drop-in `/etc/ssh/sshd_config.d/00-hg-hardening.conf` (sorts before `50-cloud-init.conf`,
+  which is why a main-config edit would be ineffective — Include is first-value-wins).
+  `PermitRootLogin prohibit-password`; `PasswordAuthentication no`; `KbdInteractiveAuthentication no`.
+- `sshd -t` OK; `systemctl reload ssh`; backups `sshd_config.bak-20261010T113658Z`.
+- Rollback: `rm -f /etc/ssh/sshd_config.d/00-hg-hardening.conf && systemctl reload ssh`.
 
 ## Handover matrix
 
 | Criterion | VPS1 | VPS2 |
 |---|---|---|
-| Owner key authorized | PASS | PASS (added 2026-10-10) |
+| Owner key authorized | PASS | PASS |
 | Key attributed to phone (not Deep) | PASS | PASS |
-| Real login from Android | PASS (historical 2026-10-09) | **PENDING (owner login)** |
-| Admin privilege | PASS (root) | PASS (root) |
-| Reconnect/ recovery path | PASS (provider console) | PASS (provider console) |
+| Real login from Android | **PASS** (historical 2026-10-09) | **PASS** (2026-10-10T11:35:42Z) |
+| Admin privilege (root) | PASS | PASS |
+| Owner controls auth method (own key) | PASS | PASS |
+| Reconnect / recovery path | PASS (provider console) | PASS (provider console) |
 | No dependence on Deep credential | PASS | PASS |
 
-`ANDROID_HANDOVER_COMPLETED = FALSE` — VPS2 live owner login not yet demonstrated; VPS1 has
-historical evidence (recommend one fresh owner login to re-confirm).
+## Remaining / recommendations
+- Optional: a fresh VPS1 login for the current period (historical evidence already exists).
+- Optional: rotate Deep's admin key (`xU04…`) off when the owner no longer needs it.
+- Break-glass: VPS provider control panel (independent of SSH); keep the owner private key
+  backed up in an encrypted store.
