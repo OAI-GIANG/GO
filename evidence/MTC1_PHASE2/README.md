@@ -16,6 +16,8 @@ and it clearly separates `code-level / unit / replica` evidence from `runtime` e
 | `ACCEPTANCE_MATRIX.md` | Every gate: PASS / FAIL / BLOCKED / NOT_RUN + evidence + evidence-class |
 | `CHECKPOINT.md` | Canonical execution checkpoint (objective…next action) |
 | `PHASE2_GATE_CLASSIFICATION.md` | REQUIRED / CONDITIONAL / OUT_OF_SCOPE + minimal verifiable closure conditions |
+| `HANDOVER.md` | Mission B — VPS1/VPS2 Android owner handover inventory, actions, recovery |
+| `RESEARCH_LOG.md` | External sources read (URL, accessed date, decisions) |
 | `EXTERNAL_RESEARCH.md` | External sources read (URL), verified content, decisions |
 | `OWNER_RUNBOOK.md` | Exact minimal owner actions to unblock each gate |
 | `IMPLEMENTATION_AND_TESTS.md` | Patches produced + how to run tests + raw results |

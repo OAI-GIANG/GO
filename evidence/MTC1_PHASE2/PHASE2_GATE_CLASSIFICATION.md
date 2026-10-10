@@ -49,13 +49,18 @@ provided the canonical runtime ledger is accepted as the runtime audit of record
 ## 4. Remaining work, priority order
 
 1. **[REQUIRED, external] B5-b ALLOW provisioning.** Provision an **external** authority root
-   key owned by a principal other than the runtime:
-   `/etc/hg/authority/root.key` (or `HG_AUTHORITY_ROOT_KEY_FILE`), mode `600`, non-empty →
-   `AuthorityRoot._load()` provenance becomes `EXTERNAL_FILE`, so `issue()` succeeds.
-   The tool-authority env in `/etc/go/go-runtime.env` is already set
-   (`HG_TOOL_AUTHORITY_PROVENANCE == …_EXPECTED`, `HG_TOOL_AUTHORITY_SUBJECT=HG_SESSION_*`).
-   Deep must NOT create the key (self-authority is forbidden). After provisioning, Deep runs
-   the ALLOW E2E and verifies COMPLETED + witness + ledger `STARTED→COMPLETED`.
+   key owned by a principal other than the runtime. On VPS1, as the owner (Deep must NOT do this):
+   ```sh
+   install -d -m 700 /etc/hg/authority
+   umask 077; head -c 32 /dev/urandom > /etc/hg/authority/root.key
+   chmod 600 /etc/hg/authority/root.key
+   systemctl restart go-runtime
+   ```
+   `AuthorityRoot._load()` then reads the file ⇒ provenance `EXTERNAL_FILE`, so `issue()`
+   succeeds and `AUTHORITY_ROOT_NOT_EXTERNAL` no longer applies. The tool-authority env in
+   `/etc/go/go-runtime.env` is already set (`HG_TOOL_AUTHORITY_PROVENANCE == …_EXPECTED`,
+   `HG_TOOL_AUTHORITY_SUBJECT=HG_SESSION_*`). After provisioning, Deep runs the ALLOW E2E and
+   verifies COMPLETED + witness + ledger `STARTED→COMPLETED`.
 2. **[CONDITIONAL] B5-a phone audit-chain.** Needs Termux access (toolplane audit file is
    private). Provide access or accept the canonical ledger as audit of record.
 3. **[OPTIONAL hardening]** Install the hardened supervisor (`patch/health-tunnel-supervisor.hardened.sh`)

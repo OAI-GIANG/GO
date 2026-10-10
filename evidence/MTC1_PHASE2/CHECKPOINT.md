@@ -34,3 +34,11 @@
 Provision an external authority root key at `/etc/hg/authority/root.key` (mode 600, owned by a
 principal other than the runtime). Deep will then run the ALLOW E2E and verify COMPLETED +
 witness + ledger `STARTED→COMPLETED`. Deep will not create the key.
+
+## Mission B — Android owner handover (this run)
+- Owner phone key (`SHA256:d9Tz…`) authorized on VPS1 root (historical logins 2026-10-09) and
+  **added to VPS2 root** this run (backup kept). VPS2 password auth left enabled pending owner
+  key verification. Details: `HANDOVER.md`, `tests/OUTPUT_handover_inventory.txt`.
+- Owner actions (Android): `ssh -i ~/.ssh/love_admin_ed25519 root@160.191.242.198` and
+  `… root@36.50.135.233`; then disconnect/reconnect and view service status.
+- `ANDROID_HANDOVER_COMPLETED = FALSE` (VPS2 live owner login pending).

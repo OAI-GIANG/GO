@@ -1,0 +1,52 @@
+# External Research Log — MTC-1.0 Phase 2 closure + Android handover
+
+Only sources actually fetched and read are listed. Access date: 2026-10-10.
+
+## 1. OpenSSH `sshd_config(5)` — https://man.openbsd.org/sshd_config (accessed 2026-10-10)
+Read: `PermitRootLogin`, `PasswordAuthentication`, `PubkeyAuthentication`, `AuthorizedKeysFile`,
+`AllowUsers`, `AuthenticationMethods`, `MaxAuthTries`.
+Findings used:
+- `PermitRootLogin prohibit-password` ("without-password" alias) disables password and
+  keyboard-interactive for root while allowing public key.
+- `PasswordAuthentication` default is `yes`; must be explicitly disabled to remove password auth.
+Decisions:
+- VPS1 already uses `PermitRootLogin without-password` + `PasswordAuthentication no` → keep.
+- VPS2 currently has `PermitRootLogin yes` + `PasswordAuthentication yes`; after the owner
+  verifies key login, harden to `prohibit-password` + `PasswordAuthentication no` (backup,
+  `sshd -t`, reload; keep a live session open during the change).
+
+## 2. OWASP Secrets Management Cheat Sheet
+https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html (accessed 2026-10-10)
+Read: §2.3 Access Control (least privilege), §2.6 Auditing, §2.7 Secret Lifecycle
+(Creation/Rotation/Revocation/Expiration), §2.8 TLS everywhere, §2.9 Break-glass/Backup.
+Findings used:
+- Rotate any potentially exposed secret and verify the old one is no longer valid.
+- Keep break-glass/backup credentials and a tested recovery path.
+- Do not grant broad access; scope secrets to least privilege.
+Decisions:
+- The accidentally-exposed `GO_API_TOKEN` was rotated and the old value verified invalid (401).
+- Handover keeps per-owner keys (phone) and an out-of-band provider recovery path.
+
+## 3. Android Application Sandbox
+https://source.android.com/docs/security/app-sandbox (accessed 2026-10-10)
+Read: UID-based kernel Application Sandbox; per-app UID/process isolation; SELinux per-app
+sandbox (Android 9+); apps have no access to other apps' package-specific paths.
+Findings used:
+- Termux (`u0_a460`) private storage is isolated from the `adb` shell UID (2000) by the kernel;
+  reading/writing it would require kernel compromise.
+Decisions:
+- Deep does not attempt to bypass UID isolation; phone-private actions are owner actions.
+- The health-tunnel fix was performed on `/sdcard` (shared storage) only.
+
+## 4. Prior sources still in force (read earlier this engagement)
+- Certbot user guide (eff-certbot.readthedocs.io) — renewal scheduling; led to adding
+  `certbot-renew.timer` (cert renewed 2026-10-13 → 2026-10-17).
+- Termux services README + runit `runsv(8)`/`runsvdir(8)` — service supervision and the
+  immediate-exit restart behaviour.
+- Linux kernel `/proc` docs — `/proc/<pid>/cmdline` and PID-reuse caveat.
+
+## Rejected / not used
+- `https://letsencrypt.org/docs/renewal/` returned HTTP 404 (not read).
+- `https://wiki.termux.com/wiki/Termux-services` served an Anubis bot-challenge (not read);
+  the official GitHub README was used instead.
+- GPT/ChatGPT Action docs — OUT_OF_SCOPE per owner decision.
