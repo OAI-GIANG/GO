@@ -31,6 +31,9 @@ deployed `hg_tool_plane.py` (sha256 `16AE914D516CB1496B7BA193DBC3928647788904AA2
 | Canonical regression | `python -m pytest -q tests` | **196 passed**, exit 0 → `tests/OUTPUT_regression.txt` |
 | Supervisor logic (isolated) | `bash tests/test_supervisor_logic.sh` | **PASS 15/15** → `tests/OUTPUT_supervisor_logic.txt` |
 | Governance negative | `python tests/test_governance_negative.py` | **PASS 13/13** → `tests/OUTPUT_governance_negative.txt` |
+| B5-b authority replica | `python tests/test_b5b_allow_replica.py` | **PASS 11/11** → `tests/OUTPUT_b5b_allow_replica.txt` |
+| GO runtime replica boot | `python -m runtime.go_runtime.core.server` (local) | `/healthz` ok, `/v1/status` RUNNING → `tests/OUTPUT_go_replica_boot.txt` |
+| Phone runtime capture | `adb` probes (this session) | crash-loop + listeners → `tests/OUTPUT_runtime_evidence.txt` |
 | Supervisor E2E (Linux/Termux) | `bash tests/test_supervisor_e2e_linux.sh` | **NOT RUN** here (no Linux `/proc`); harness provided |
 
 ### What the supervisor logic test proves
@@ -48,6 +51,26 @@ deployed `hg_tool_plane.py` (sha256 `16AE914D516CB1496B7BA193DBC3928647788904AA2
 - **unmapped side-effect (vps_exec, github_api write) ⇒ default DENY** (gap closed);
 - destructive deny-list blocks `rm -rf`, `dd`, `DELETE` **even with `approved=true`**;
   benign command allowed.
+
+### B5-b authority replica (`test_b5b_allow_replica.py`)
+Runs the real canonical components against a locally provisioned **external** root (no
+phone): no root ⇒ `AUTHORITY_ROOT_NOT_PROVISIONED`; ephemeral ⇒ `AUTHORITY_ROOT_NOT_TRUSTED`;
+no revocation store; no token file ⇒ `AUTHORITY_PROVENANCE_MISSING`; with root + issued token
+⇒ **COMPLETED** with witness + `governance_source_sha256`, ledger
+`ACCEPTED→VALIDATED→AUTHORIZATION_PENDING→APPROVED→STARTED→COMPLETED`; duplicate
+⇒ `IDEMPOTENT_RESULT_REUSE_DENIED`. Proves the ALLOW *mechanics*; the phone remains BLOCKED
+until an external owner provisions the root.
+
+### GO runtime replica boot (`OUTPUT_go_replica_boot.txt`)
+Method: `GO_HOST=127.0.0.1 GO_PORT=18899 GO_ALLOW_ANONYMOUS=false GO_API_TOKEN=… \
+python -m runtime.go_runtime.core.server` from the repo root. Result: `/healthz` `status:ok`;
+`/v1/status` (auth) RUNNING with 28 ops incl. `vps1.edge.health`; `/v1/status` without token
+= 401; governance `source_sha256=cc1a8b17…`. This isolates the phone failure as
+environmental (the entrypoint is sound).
+
+### Phone B1 finding (`OUTPUT_runtime_evidence.txt`)
+`runsv go-runtime` exists but the server process churns (<2s) and never binds `8877` ⇒
+runtime FAIL. Legacy `/api/health` (8787) is healthy; no `health-tunnel.py` process.
 
 ## Reproduce
 

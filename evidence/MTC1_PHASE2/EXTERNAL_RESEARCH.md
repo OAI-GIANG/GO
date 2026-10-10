@@ -55,6 +55,26 @@ Decisions affected (B2):
   immediate exits, and no restart when state is ambiguous. The hardened supervisor adds
   exponential backoff (1s→2s→…→cap) and a FAIL-CLOSED path on duplicates.
 
+## 2b. Termux services (runit) — official
+
+### https://raw.githubusercontent.com/termux/termux-services/master/README.md
+Verified content: install `termux-services`; restart the shell so the service-daemon
+starts; enable with `sv-enable <service>` or simply `sv up <service>`; check problems in
+`$PREFIX/var/log/sv/<service>/current`; a service is disabled if
+`$PREFIX/var/service/<service>/down` exists.
+Decision: matches the measured phone state (`runsvdir` pid 9688 + `runsv go-runtime`). To
+diagnose the GO crash loop the owner reads `$PREFIX/var/log/sv/go-runtime/current`; to
+(re)start use `sv up go-runtime` — now valid because `runsvdir` is running, so the earlier
+`unable to open supervise/ok` should not recur.
+Note: `https://wiki.termux.com/wiki/Termux-services` returned an **Anubis bot-challenge**
+page and could not be read; the official GitHub README was used instead.
+
+### http://smarden.org/runit/runsvdir.8.html
+Verified content: `runsvdir` starts a `runsv` per service subdir, rescans the dir at least
+every 5s, up to 1000 subdirs, and restarts a runsv if it terminates; TERM stops monitoring.
+Decision: a registered service whose `run` exits immediately is restarted by runsv →
+explains the measured GO "<2s process churn".
+
 ## 3. Linux `/proc` — process identity
 
 ### 3.1 https://www.kernel.org/doc/html/latest/filesystems/proc.html

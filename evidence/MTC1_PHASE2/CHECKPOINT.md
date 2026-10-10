@@ -1,8 +1,8 @@
 # MTC-1.0 Phase 2 — Execution Checkpoint
 
-- Updated: 2026-10-10T10:35Z
+- Updated: 2026-10-10T10:37Z
 - Branch: `feature/stt-b1-b5-reconciliation-20261010`
-- Base HEAD (before this commit): `946163c0c03c168f17128371c1b3ed6baa67b104`
+- Base HEAD (before this commit): `05423bc6c18ec7287b631a4c1b17af775837f1f2`
 - Remote: `github.com/OAI-GIANG/GO`
 - Overall status: **INCOMPLETE**
 
@@ -11,44 +11,47 @@ Close the remaining mandatory acceptance gates of HG MTC-1.0 Phase 2 with
 implementation, runtime verification, E2E tests and independently checkable evidence.
 
 ## SCOPE
-- Allowed: `feature/stt-b1-b5-reconciliation-20261010` only. No merge, no `main`, no
-  `hg-core` change, no production mutation.
-- Device access actually held: `adb` read-only on OPPO PKC110; VPS1 edge HTTPS read.
-- Not held: Termux shell (`sshd:8022` closed), ChatGPT Action UI/credentials.
+- Allowed branch only. No merge, no `main`, no `hg-core` change, no production mutation.
+- Device access held: `adb` read-only (+ loopback `adb forward`), VPS1 edge HTTPS read.
 
-## INPUT (measured this run)
-- Phone `BIXSMFNBRCNN95T4`, Termux user `u0_a460`, LAN `192.168.1.194`, sshd `8022` **closed**.
-- Running on phone: `hg_backend.py`, `hg_runtime.py` (legacy HG). **No GO runtime.**
-- Supervisor `10459` running; **no `health-tunnel.py`**; last tunnel serve `00:38:59Z`.
-- `/sdcard/hg-go-deploy-result.txt`: GO deploy `FAIL: sv up thất bại`.
-- VPS1: `/edge/health` 200; gate endpoint 401 without token.
-- Repo `hg-core` also carries `tool_runtime.py` (26315 B) absent on phone.
+## INPUT (measured this run, 2026-10-10T10:36Z)
+- runit running: `runsvdir` pid 9688 + `runsv go-runtime` (9694), `runsv hg-runtime`,
+  `hg-backend`, `sshd`, `cloudflared`, `og-runtime`, `ssh-agent`.
+- **GO on phone: crash/restart loop** — server lives <~2s (pid `30217` seen once, then
+  gone), **no `127.0.0.1:8877` listener**. `runsv go-runtime` restarts it.
+- Legacy HG `/api/health` on `127.0.0.1:8787` → 200 `READY / HG_LOCAL / phone_bridge V2`.
+- health-tunnel: **no process**; supervisor `10459` running; last `GATE_REQUEST` 00:38:59Z.
+- `sshd:8022` **closed**; Termux private storage not reachable via adb.
+- Edge TLS: valid Let's Encrypt cert, IP SAN `160.191.242.198`, expires **2026-10-13**.
 
 ## OUTPUT (this run)
-- `evidence/MTC1_PHASE2/` set: acceptance matrix, research, runbook, tests, patches, manifest.
-- `patch/health-tunnel-supervisor.hardened.sh` (+ `.original.sh`, unified diff): fixes B2 loop.
-- `patch/hg_tool_plane.governance.patch`: closes B5-a coverage gap (default-deny side effects).
-- Tests: supervisor logic `PASS 15/15`; governance negative `PASS 13/13`; regression `196 passed`.
+- New evidence: `tests/OUTPUT_runtime_evidence.txt`, `tests/OUTPUT_go_replica_boot.txt`,
+  `tests/OUTPUT_b5b_allow_replica.txt`.
+- New test: `tests/test_b5b_allow_replica.py` → **11/11 PASS** (DENY paths + full ALLOW
+  mechanics + idempotency).
+- Updated `OWNER_RUNBOOK.md` (preflight/backup/rollback/stop; GO service fix via runit;
+  nohup flagged as a canonical deviation).
 
 ## ACCEPTANCE CRITERIA
-See `ACCEPTANCE_MATRIX.md`. Runtime PASS requires device/edge evidence.
+See `ACCEPTANCE_MATRIX.md`. Runtime PASS requires device/edge evidence; replica ≠ runtime.
 
 ## EVIDENCE
-- This directory + `tests/OUTPUT_*.txt` (raw stdout, exit codes embedded by the harnesses).
-- Device evidence files under `/sdcard/*.txt` captured via `adb` (referenced, not copied).
+- This directory + `MANIFEST.sha256`; phone evidence under `/sdcard/*.txt` (referenced).
 
 ## RISKS
-- Termux sshd down ⇒ device-side automation impossible; owner must restore.
-- Custom GPT Actions deprecating (Dec 11 2026) ⇒ B4 is time-bounded; prefer Plugins migration.
-- PID hygiene via `/proc/cmdline` is best-effort (PID reuse) — third-party supervision safer.
+- Edge cert expires 2026-10-13 (renewal required for B4 continuity).
+- GO crash loop root cause needs `$PREFIX/var/log/sv/go-runtime/current` (owner read).
+- Custom GPT Actions deprecating → B4 time-bounded; prefer Plugins migration.
 
 ## STOP CONDITION
-Stop only when all mandatory gates PASS, or each remaining blocker is objectively shown to
-be outside current tools/rights with a precise unlock action. Do **not** fabricate a PASS.
+Stop only when all mandatory gates PASS, or each blocker is objectively outside current
+tools/rights with a precise unlock action. No fabricated PASS.
 
 ## NEXT ACTION
-1. Owner: apply `patch/health-tunnel-supervisor.hardened.sh` in Termux (see `OWNER_RUNBOOK.md`);
-   fix GO service (`~/go` + `sv up go-runtime`).
-2. Owner: import the B4 OpenAPI + set Bearer secret; allowlist domain.
-3. External owner: provision authority root + trusted approval issuers (B5-b ALLOW).
-4. Deep (when sshd restored): run B1/B5-a/B2 runtime verification; then B5-b DENY; then ALLOW.
+1. Owner: `tail -n 60 "$PREFIX/var/log/sv/go-runtime/current"`, fix `~/go`/`go.env`, then
+   `sv down/up go-runtime` (one attempt; return logs on failure).
+2. Owner: install hardened supervisor + restore tunnel (B2).
+3. Owner: B4 import + Bearer secret + domain allowlist.
+4. External owner: provision authority root/revocation/issuers/token (B5-b ALLOW).
+5. Deep (when `sshd:8022` opens or loopback GO is up): run B1/B2/B5-a runtime verification;
+   then B5-b DENY; then ALLOW.
