@@ -47,6 +47,7 @@ witness + ledger `STARTED→COMPLETED`. Deep will not create the key.
   `tests/OUTPUT_vps2_hardening.txt`.
 
 ## Completion flags
-- `PHASE2_COMPLETED = FALSE` — B5-b ALLOW REQUIRED still BLOCKED (`/etc/hg/authority/root.key` absent).
+- `PHASE2_COMPLETED = FALSE` — **B5-b ALLOW now PASS**, but **B2 tunnel regressed** (supervisor was
+  a manual process, lost on the runit restart; not a managed service). Restore B2 → then TRUE.
 - `ANDROID_HANDOVER_COMPLETED = TRUE` — owner phone key logged into both VPS1 (2026-10-09) and
   VPS2 (2026-10-10T11:35:42Z); root admin verified; owner controls the key; provider-console recovery.

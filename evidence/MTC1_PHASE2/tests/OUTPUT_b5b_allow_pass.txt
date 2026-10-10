@@ -1,0 +1,39 @@
+MTC-1.0 — B5-b ALLOW E2E PASS (real runtime, VPS1) — 2026-10-10T11:45:25Z
+
+Owner provisioned the external authority root; Deep ran the ALLOW E2E (no provisioning by Deep).
+
+== Prerequisite state ==
+/etc/hg/authority/root.key : mode=600 size=32 owner=root:root  (value never read/printed)
+provenance (fresh process, service EnvironmentFile): provenance = EXTERNAL_FILE | is_external = True
+
+== ALLOW E2E (canonical ToolGovernance; task=HG-TOOLPLANE; tool=vps1.edge.health) ==
+service env reproduced: EnvironmentFile=/etc/go/go-runtime.env + HG_EDGE_URL=https://160.191.242.198
+result: ok = True
+output: {"status": 200, "body": {"ok": true, "edge": "HG_EDGE", "gate": true,
+                                 "time": "2026-10-10T11:45:25.740319+00:00"}}
+witness: status=COMPLETED, error_type=null,
+         arguments_digest=sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a,
+         output_digest=sha256:35d1a7e7bfa4b5c615cd096ddd22e35b4ce3fbc21b625a2935c05d7709d47d2c,
+         witness_digest=sha256:81a275a3fa6768d0ca91c48d05299cf0c3f8e7b3c47f086c3ae53e0ec42fe9f4,
+         subject=HG_SESSION_IDENTITY_MIGRATION_FINAL_20261008_1200, scope=tool:vps1.edge.health,
+         contract_version=TOOL-CONTRACT-V1
+ledger states: ACCEPTED -> VALIDATED -> AUTHORIZATION_PENDING -> APPROVED -> STARTED -> COMPLETED
+ledger COMPLETED event_id: TE-eabeb64a9d7b4f40af4d7976825e923b
+                            idempotency_key sha256:b8cc0dde7cd41faad8dcec194e8f15bfaeeda54e0331030a7a50f843cd1f10ee
+
+== Idempotency ==
+second call (same task/tool/arguments, new call_id CALL-ALLOW-E2E-2):
+  ok = True, output identical (same body/time 11:45:25.740319Z) => cached terminal result reused,
+  no second execution/side effect.
+
+== Note on "governance hash" ==
+The deployed build binds contract_version (TOOL-GOVERNANCE-V1/TOOL-CONTRACT-V1) and content
+digests (arguments_digest, output_digest, witness_digest); it does NOT emit a
+governance_source_sha256 field (that belongs to the newer `governance_source` module which is
+not deployed on VPS1). Provenance is therefore: witness_digest + ledger event_id + contract_version
++ the authorized subject.
+
+== Earlier failure (transient, resolved without changing authority) ==
+First attempt failed with PermissionError HG_EDGE_URL not configured because the ad-hoc shell
+loaded only /etc/go/go-runtime.env; the unit sets HG_EDGE_URL via a systemd drop-in. Re-running
+with the service's full environment produced the COMPLETED result above. Authority was not altered.
