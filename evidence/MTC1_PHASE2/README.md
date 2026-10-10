@@ -38,3 +38,4 @@ and it clearly separates `code-level / unit / replica` evidence from `runtime` e
   re-checks the governance patch). Default Windows `core.autocrlf=true` rewrites endings on
   checkout and will make `sha256sum -c MANIFEST.sha256` mismatch — that is a checkout
   artifact, not a content change.
+| `B5B_AUTHORITY_PREFLIGHT.md` | Read-only B5-b authority preflight (SAFE_FOR_OWNER_PROVISION) |
