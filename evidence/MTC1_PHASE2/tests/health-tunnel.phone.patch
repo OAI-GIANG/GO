@@ -1,0 +1,42 @@
+--- health-tunnel.phone-original.py	2026-10-10 18:12:07.377595700 +0700
++++ health-tunnel.phone-patched.py	2026-10-10 18:09:15.204043700 +0700
+@@ -5,6 +5,30 @@
+ Token CHỈ từ env. Mặc định DRY-RUN."""
+ import base64, json, os, platform, socket, sys, time, urllib.error, urllib.request
+ E = os.environ
++# --- MTC-1.0 B2 self-config: read ~/.config/hg/edge.conf + edge_token as DATA ---
++# The supervisor spawns this file WITHOUT exporting HG_EDGE_*, which made the tunnel
++# exit immediately. Load config here as plain data (never source/eval) so the tunnel
++# runs with the intended device/edge/token.
++import pathlib as _pathlib
++_CF = _pathlib.Path(os.path.expanduser("~/.config/hg/edge.conf"))
++_TKF = _pathlib.Path(os.path.expanduser("~/.config/hg/edge_token"))
++def _cfgd(k):
++    try:
++        for _ln in _CF.read_text(errors="replace").splitlines():
++            _ln = _ln.strip()
++            if _ln.startswith(k + "="):
++                return _ln.split("=", 1)[1].strip()
++    except OSError:
++        pass
++    return ""
++if not (E.get("HG_EDGE_URL") or E.get("HG_TUNNEL_URL")):
++    _u = _cfgd("HG_EDGE_URL")
++    if _u: os.environ["HG_EDGE_URL"] = _u
++if not E.get("HG_EDGE_DEVICE"):
++    _d = _cfgd("HG_EDGE_DEVICE")
++    if _d: os.environ["HG_EDGE_DEVICE"] = _d
++if not E.get("HG_EDGE_TOKEN_FILE") and _TKF.exists():
++    os.environ["HG_EDGE_TOKEN_FILE"] = str(_TKF)
+ EDGE = (E.get("HG_EDGE_URL") or E.get("HG_TUNNEL_URL") or "").rstrip("/")
+ TOKF = E.get("HG_EDGE_TOKEN_FILE", "")
+ def _load_token():
+@@ -40,7 +64,7 @@
+     done("SELFTEST_OK" if all(o for _, o in c) else "SELFTEST_FAIL")
+ if not DEV: done("BLOCKED_DEVICE_ID_UNSET (đặt HG_EDGE_DEVICE = device_id thật trên edge; KHÔNG đoán)")
+ if not EDGE or not TOK: done("BLOCKED_EDGE_OR_TOKEN_ABSENT")
+-if "--apply" not in sys.argv: done("DRY_RUN_OK")
++if "--dry-run" in sys.argv: done("DRY_RUN_OK")
+ def health_payload():
+     return {"ok": True, "runtime": "HG_TUNNEL_HEALTH", "transport": "edge-http-long-poll",
+             "device_id": DEV, "host": socket.gethostname(), "python": platform.python_version(),

@@ -37,7 +37,9 @@ deployed `hg_tool_plane.py` (sha256 `16AE914D516CB1496B7BA193DBC3928647788904AA2
 | GO crash-loop root cause | `python tests/test_go_crashloop_rootcause.py` | **demonstrated** → `tests/OUTPUT_go_crashloop_rootcause.txt` |
 | VPS1 B1 + B5-b DENY (real host) | `bash tests/vps1_b1_b5b_verify.sh` (root@VPS1) | B1 **PASS**, DENY **PASS** → `tests/OUTPUT_vps1_runtime.txt` |
 | VPS1 edge queue/gate | `bash tests/vps1_edge_verify.sh` | `queue=3`, gate timeout → `tests/OUTPUT_vps1_runtime.txt` |
-| VPS1 ledger/cert/authority | `bash tests/vps1_ledger_cert_verify.sh` | cert no-renewal; `/etc/hg/authority` absent |
+| VPS1 ledger/cert/authority | `bash tests/vps1_ledger_cert_verify.sh` | cert no-renewal (now fixed); `/etc/hg/authority` absent |
+| B2/B4 runtime (phone+edge) | live fix + gate round-trip | B2 PASS, gate 200 → `tests/OUTPUT_b2_b4_runtime.txt` |
+| TLS renewal | `certbot renew` + `certbot-renew.timer` | cert 2026-10-13 → 2026-10-17 |
 | Supervisor E2E (Linux/Termux) | `bash tests/test_supervisor_e2e_linux.sh` | **NOT RUN** here (no Linux `/proc`); harness provided |
 
 ### What the supervisor logic test proves

@@ -49,22 +49,19 @@ owns the process). One restart attempt only; return the log if it still fails.
 
 ---
 
-## 2. B2 — tunnel recovery (phone + VPS1 verification)
+## 2. B2 — tunnel (RESOLVED this run; hardening optional)
 
-Measured: edge `/edge/tunnel/status` → `queue=3, pending=0`; `hg-edge` logs `GATE_TIMEOUT 504`;
-no `health-tunnel.py` process on the phone. The phone tunnel is not draining.
+Root cause: the supervisor spawned `python3 /sdcard/HG-GO-DEPLOY/health-tunnel.py` **without
+`--apply` and without `HG_EDGE_*`**, so the tunnel printed `DRY_RUN_OK` and exited → restart
+loop → edge `GATE_TIMEOUT 504`. Fix applied: the tunnel file was replaced (backup
+`health-tunnel.py.bak-20261010T110939Z`) with a self-configuring, apply-by-default build.
+Verified now: single tunnel pid stable, edge `queue=0`, gate Bearer → **HTTP 200**,
+phone evidence `GATE_REQUEST status:200`.
 
-Install the hardened supervisor (fixes missing `HG_EDGE_*` export) in Termux:
-```sh
-cp "$HOME/health-tunnel-supervisor.sh" "$HOME/health-tunnel-supervisor.sh.bak-$(date -u +%Y%m%dT%H%M%SZ)" 2>/dev/null || true
-# place patch/health-tunnel-supervisor.hardened.sh (from this repo) in $HOME, then:
-pkill -f health-tunnel-supervisor.sh 2>/dev/null
-nohup bash "$HOME/health-tunnel-supervisor.hardened.sh" >> "$HOME/health-tunnel.log" 2>&1 &
-```
-Verify (phone): exactly one `health-tunnel.py`; log `tunnel alive`.
-Verify (VPS1, Deep/owner): `/edge/tunnel/status` shows `queue` draining toward `0`; a gate call
-`/h/phone-primary-u0_a460/api/health` with the gate token returns HTTP 200; `/sdcard/
-hg-tunnel-evidence.jsonl` gains a `GATE_REQUEST status=200`.
+Optional hardening (recommended, needs Termux): install
+`patch/health-tunnel-supervisor.hardened.sh` so the supervisor exports `HG_EDGE_*` and passes
+`--apply` explicitly, and add crash-loop backoff. Rollback: restore the `.bak` tunnel file and
+restart the supervisor.
 
 ---
 

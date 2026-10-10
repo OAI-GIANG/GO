@@ -27,10 +27,10 @@ Targets (measured): **VPS1** `160.191.242.198` (`vps-hjcscw`) hosts the canonica
 | Item | Status | Class | Evidence |
 |---|---|---|---|
 | Supervisor process (phone) | **PASS** | runtime | pid `10459` running |
-| Tunnel draining / serving | **FAIL** | runtime | edge `queue=3, pending=0`; `GATE_TIMEOUT 504` + BrokenPipeError in `hg-edge` |
-| Restart-loop | **FAIL** | runtime | no `health-tunnel.py`; supervisor cannot keep it up |
-| Fix (hardened supervisor) | **PASS** | unit | 15/15 incl. env-export proof |
-| `edge queue=0` | **FAIL** | runtime | currently `3` |
+| Tunnel stable (single, no restart loop) | **PASS** | runtime | pid `2773` unchanged across 4 samples/30s |
+| `edge queue = 0` | **PASS** | runtime | `/edge/tunnel/status` → `queue=0` stable |
+| `GATE_REQUEST` HTTP 200 | **PASS** | runtime | gate round-trip 200; phone evidence `GATE_REQUEST …status:200 @11:10:53Z` |
+| Root cause + fix | **PASS** | runtime+code | supervisor spawned the tunnel without `--apply`/env, so it exited instantly; tunnel artifact patched (self-config + apply-by-default); `tests/health-tunnel.phone.patch` |
 
 ## Gate B5-a — tool-layer deny / audit
 
@@ -48,10 +48,11 @@ Targets (measured): **VPS1** `160.191.242.198` (`vps-hjcscw`) hosts the canonica
 | Item | Status | Class | Evidence |
 |---|---|---|---|
 | Schema valid OpenAPI 3.1, GET, Bearer | **PASS** | code | `HG-CONNECTOR-HEALTH-OPENAPI.yaml` |
-| HTTPS + valid TLS | **PASS** | runtime | Let's Encrypt cert, IP SAN `160.191.242.198` |
-| TLS renewal configured | **FAIL/BLOCKED** | runtime | certbot **not installed**, no renewal timer; cert expires `2026-10-13T01:54Z` |
-| Gate auth enforced | **PASS** | runtime | `/h/...` no token → 401 |
-| E2E real request HTTP 200 | **BLOCKED** | runtime | tunnel down (queue=3/GATE_TIMEOUT); also needs ChatGPT UI + domain allowlist |
+| HTTPS + valid TLS | **PASS** | runtime | renewed: cert `notAfter 2026-10-17T02:09:59Z` |
+| TLS renewal durable | **PASS** | runtime | `certbot-renew.timer` enabled (twice daily); certbot 5.8.0 |
+| Gate auth enforced | **PASS** | runtime | no token → **401**; wrong token → 401 |
+| Server-side authenticated 200 + device evidence | **PASS** | runtime | gate Bearer → **200** (`HG_TUNNEL_HEALTH`, `python 3.14.6`, `aarch64`); phone evidence `GATE_REQUEST status:200 @11:10:53Z` |
+| ChatGPT UI import + domain allowlist (owner) | **BLOCKED** | external | no ChatGPT session; import + secret + allowlist is an owner/UI step |
 
 ## Gate B5-b — canonical DENY + ALLOW
 
@@ -73,8 +74,10 @@ Targets (measured): **VPS1** `160.191.242.198` (`vps-hjcscw`) hosts the canonica
 
 ## Overall
 
-**INCOMPLETE.** New runtime PASS this round: **B1** (VPS1 GO liveness + authenticated 200 +
-401) and **B5-b DENY** (VPS1 canonical ToolGovernance, and the production ledger shows real
-DENIED events). Remaining: **B2** tunnel (edge `queue=3`, phone tunnel not running), **B4**
-tunnel+UI+**cert renewal**, **B5-b ALLOW** (external authority not provisioned), **B5-a**
-phone-side audit runtime. Exact owner actions in `OWNER_RUNBOOK.md`.
+**INCOMPLETE.** Runtime PASS this round: **B1** (VPS1 GO liveness + authenticated 200 + 401),
+**B5-b DENY** (VPS1 canonical ToolGovernance + production-ledger DENIED events), **B2**
+(phone tunnel single/stable, edge `queue=0`, `GATE_REQUEST 200`), and **B4 server-side +
+TLS renewal** (authenticated gate 200 with device evidence; cert renewed to 2026-10-17 with a
+renewal timer). Remaining: **B4 UI import** (owner), **B5-b ALLOW** (external authority not
+provisioned), **B5-a phone-side audit runtime** (Termux), **phone-local GO** (separate; not
+required for B1). Exact owner actions in `OWNER_RUNBOOK.md`.
