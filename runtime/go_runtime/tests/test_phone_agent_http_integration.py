@@ -1,0 +1,46 @@
+"""Integration THẬT qua HTTP server (không mock): register → enqueue → poll → result → replay → negatives."""
+import json, pathlib, sys, urllib.error, urllib.request
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "core"))
+from phone_agent_server_v2 import PhoneAgentServer            # noqa
+from phone_agent_http import make_http_server                 # noqa
+P, F = [], []
+def rec(n, c, d=""): (P if c else F).append((n, d))
+agent = PhoneAgentServer(pairing_tokens={"PAIR-X"})
+srv, _ = make_http_server(agent, internal_key="INTERNAL-KEY")
+base = f"http://127.0.0.1:{srv.server_address[1]}"
+def call(path, body=None, token=None, key=None):
+    req = urllib.request.Request(base + path, data=json.dumps(body or {}).encode(), method="POST")
+    req.add_header("Content-Type", "application/json")
+    if token: req.add_header("Authorization", "Bearer " + token)
+    if key: req.add_header("X-Internal-Key", key)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r: return r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e: return e.code, json.loads(e.read())
+s, b = call("/api/phone/register", {"pairing_token": "WRONG", "device_id": "d1"})
+rec("http_register_wrong_pairing_403", s == 403 and b["error"]["code"] == "PAIRING_DENIED", f"{s}")
+s, b = call("/api/phone/register", {"pairing_token": "PAIR-X", "device_id": "d1", "name": "Phone"})
+tok = b.get("device_token"); rec("http_register_200_token", s == 200 and tok and b["protocol"] == "LONGPOLL_HTTPS_V2")
+s, b = call("/api/phone/poll", {"wait_s": 0}, token="bad.token")
+rec("http_poll_bad_token_401", s == 401 and b["error"]["code"] == "TOKEN_INVALID", f"{s}")
+s, b = call("/internal/phone/enqueue", {"device_id": "d1", "capability": "WRITE_FILE", "params": {}}, key="WRONG")
+rec("http_enqueue_requires_internal_key", s == 403, f"{s}")
+s, b = call("/internal/phone/enqueue", {"device_id": "d1", "capability": "SHELL_EXEC", "params": {}}, key="INTERNAL-KEY")
+rec("http_enqueue_unknown_capability_400", s == 400 and b["error"]["code"] == "CAPABILITY_DENIED", f"{s}")
+s, b = call("/internal/phone/enqueue", {"device_id": "d1", "capability": "WRITE_FILE", "params": {"path": "../../x"}}, key="INTERNAL-KEY")
+rec("http_enqueue_traversal_400", s == 400 and b["error"]["code"] == "PATH_REJECTED", f"{s}")
+s, e = call("/internal/phone/enqueue", {"device_id": "d1", "capability": "WRITE_FILE", "params": {"path": "a.txt", "content_b64": "aGk="}}, key="INTERNAL-KEY")
+rid = e["request_id"]; rec("http_enqueue_200", s == 200 and rid.startswith("CALL-"))
+s, p = call("/api/phone/poll", {"wait_s": 2}, token=tok)
+rec("http_poll_delivers", s == 200 and p.get("request_id") == rid and p["capability"] == "WRITE_FILE", f"{s}")
+s, b = call("/api/phone/result", {"request_id": "CALL-nope", "ok": True}, token=tok)
+rec("http_result_mismatch_409", s == 409 and b["error"]["code"] == "REQUEST_MISMATCH", f"{s}")
+s, b = call("/api/phone/result", {"request_id": rid, "ok": True, "result": {"sha256": "sha256:aa"}}, token=tok)
+rec("http_result_200_done", s == 200 and b["state"] == "DONE", f"{s}")
+s, b = call("/api/phone/result", {"request_id": rid, "ok": True}, token=tok)
+rec("http_result_replay_409", s == 409 and b["error"]["code"] == "REPLAY_REJECTED", f"{s}")
+rec("audit_chain_valid_after_http", agent.verify_audit()["ok"] and agent.verify_audit()["records"] >= 8)
+srv.shutdown()
+for n, d in P: print(f"  PASS | {n:38} | {d}")
+for n, d in F: print(f"  FAIL | {n:38} | {d}")
+print(f"  ── TỔNG HTTP integration: PASS={len(P)} FAIL={len(F)}")
+sys.exit(0 if not F else 1)
