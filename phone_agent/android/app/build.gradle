@@ -1,0 +1,13 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.hg.phoneagent'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'com.hg.phoneagent'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '0.1.0'
+    }
+}
