@@ -19,6 +19,9 @@ implementation, runtime verification, E2E tests and independently checkable evid
   `hg-backend`, `sshd`, `cloudflared`, `og-runtime`, `ssh-agent`.
 - **GO on phone: crash/restart loop** — server lives <~2s (pid `30217` seen once, then
   gone), **no `127.0.0.1:8877` listener**. `runsv go-runtime` restarts it.
+  Root cause (replica-demonstrated): `GOApplication.__init__` → `verify_governance_source()`
+  requires `control/MASTER_GOVERNANCE_RULESET_V1.md` (sha `cc1a8b17…`); the deploy manifest
+  has no such entry → `V1_CANONICAL_SOURCE_MISSING` → exit.
 - Legacy HG `/api/health` on `127.0.0.1:8787` → 200 `READY / HG_LOCAL / phone_bridge V2`.
 - health-tunnel: **no process**; supervisor `10459` running; last `GATE_REQUEST` 00:38:59Z.
 - `sshd:8022` **closed**; Termux private storage not reachable via adb.

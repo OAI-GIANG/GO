@@ -29,6 +29,7 @@ Raw captures: `tests/OUTPUT_runtime_evidence.txt`, `tests/OUTPUT_go_replica_boot
 | GO entrypoint sound (`-m runtime.go_runtime.core.server`) | **PASS** | replica | `/healthz` `status:ok`, `/v1/status` RUNNING, 28 ops incl. `vps1.edge.health` |
 | GO governance source verified | **PASS** | replica | `source_sha256=cc1a8b17…` == protected Policy V1 hash |
 | **GO runtime on phone** | **FAIL** | runtime | `runsv go-runtime` present but server lives <~2s (pid sample 2 caught `30217`, samples 1/3 empty); **no `127.0.0.1:8877` listener** |
+| GO crash-loop root cause | **PASS (identified)** | replica | `verify_governance_source()` raises `V1_CANONICAL_SOURCE_MISSING`; deploy manifest has no `MASTER_GOVERNANCE_RULESET_V1*` → startup crash (`tests/OUTPUT_go_crashloop_rootcause.txt`) |
 | Legacy HG `/api/health` via `adb forward` | **PASS** | runtime | `HTTP 200 {"runtime":"READY","core":"HG_LOCAL","phone_bridge":"V2"}` |
 
 ## Gate B2 — supervisor runtime

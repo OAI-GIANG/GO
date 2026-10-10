@@ -34,6 +34,7 @@ deployed `hg_tool_plane.py` (sha256 `16AE914D516CB1496B7BA193DBC3928647788904AA2
 | B5-b authority replica | `python tests/test_b5b_allow_replica.py` | **PASS 11/11** → `tests/OUTPUT_b5b_allow_replica.txt` |
 | GO runtime replica boot | `python -m runtime.go_runtime.core.server` (local) | `/healthz` ok, `/v1/status` RUNNING → `tests/OUTPUT_go_replica_boot.txt` |
 | Phone runtime capture | `adb` probes (this session) | crash-loop + listeners → `tests/OUTPUT_runtime_evidence.txt` |
+| GO crash-loop root cause | `python tests/test_go_crashloop_rootcause.py` | **demonstrated** → `tests/OUTPUT_go_crashloop_rootcause.txt` |
 | Supervisor E2E (Linux/Termux) | `bash tests/test_supervisor_e2e_linux.sh` | **NOT RUN** here (no Linux `/proc`); harness provided |
 
 ### What the supervisor logic test proves

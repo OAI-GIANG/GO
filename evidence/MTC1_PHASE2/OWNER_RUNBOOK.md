@@ -43,20 +43,31 @@ Observed by Deep: `runsv go-runtime` exists but the server process lives <~2s an
 binds `127.0.0.1:8877` (no listener) → **crash loop**. Deep verified the entrypoint itself
 is sound on a replica (see `tests/OUTPUT_go_replica_boot.txt`); the fault is environmental.
 
-Diagnose (read-only):
+**Root cause (demonstrated on replica, `tests/OUTPUT_go_crashloop_rootcause.txt`):**
+`GOApplication.__init__` runs `config.validate()` then `verify_governance_source()`, which
+hard-requires `control/MASTER_GOVERNANCE_RULESET_V1.md` at sha256 `cc1a8b17…` plus its
+approval binding. The deploy manifest `GO-MATERIALIZATION-MANIFEST.json` contains **no**
+`control/MASTER_GOVERNANCE_RULESET_V1*` entries → a `~/go` built from it raises
+`V1_CANONICAL_SOURCE_MISSING` on startup → `runsv` restarts it (matching the <2s churn and
+the absence of any `8877` listener). A second possible blocker: missing `GO_API_TOKEN`
+(`ValueError` unless anonymous).
+
+Minimal fix (in order):
+- **Restore the governance files**: redeploy `~/go` from the **current canonical branch**
+  (which includes `control/MASTER_GOVERNANCE_RULESET_V1.md` + binding):
+  ```sh
+  cd ~/HG-GO-DEPLOY 2>/dev/null || cd /sdcard/HG-GO-DEPLOY
+  bash preflight-go.sh            # writes ~/go-candidate and verifies it
+  bash deploy-go-service.sh       # creates the service; if ~/go already exists, replace it
+  ```
+- **Ensure `GO_API_TOKEN`** exists in `~/.config/hg/go.env` (mode 600) — the runtime requires
+  a token unless `GO_ALLOW_ANONYMOUS=true`. Do not print the value.
+- **Stale/incorrect service `run`** → re-create it from the `deploy-go-service.sh` G4 template.
+
+Confirm the cause first with the log (it will name the exact `GovernanceSourceError` code):
 ```sh
 tail -n 60 "$PREFIX/var/log/sv/go-runtime/current"
 ```
-Typical causes and the minimal fix:
-- **`~/go` incomplete** → re-materialize the candidate, then redeploy the service:
-  ```sh
-  cd ~/HG-GO-DEPLOY 2>/dev/null || cd /sdcard/HG-GO-DEPLOY
-  bash preflight-go.sh            # writes ~/go-candidate, verifies against the manifest
-  # then either re-run deploy-go-service.sh (creates the service and sv up), or, if ~/go exists:
-  ```
-- **Missing `GO_API_TOKEN`** in `~/.config/hg/go.env` (mode 600) → the runtime requires a
-  token unless `GO_ALLOW_ANONYMOUS=true`; add the token (do not print it) and restart.
-- **Stale/incorrect service `run`** → re-create it (from `deploy-go-service.sh` G4 template).
 
 Restart the **service** (canonical-aligned; the unit owns the process):
 ```sh
