@@ -14,7 +14,7 @@ Targets: VPS1 `160.191.242.198` (edge + canonical GO `/opt/go`, `127.0.0.1:8877`
 | **B5-b ALLOW E2E** | REQUIRED | **PASS (runtime)** | external root provisioned; `vps1.edge.health` → **COMPLETED** + witness + ledger `STARTED→COMPLETED` + idempotency (`tests/OUTPUT_b5b_allow_pass.txt`) |
 | TLS valid + renewal | REQUIRED | **PASS** (runtime) | `notAfter 2026-10-17`; `certbot-renew.timer` active |
 | Evidence/manifest/SHA | REQUIRED | **PASS** | `MANIFEST.sha256` |
-| **B2 tunnel (single/stable, `queue=0`, gate 200)** | REQUIRED | **FAIL (regressed 2026-10-10T11:46Z)** | runit restarted; manual supervisor gone → no `health-tunnel.py`; edge `queue=1`; gate `000` (`tests/OUTPUT_regression_20261010T1146.txt`) |
+| **B2 tunnel (single/stable, `queue=0`, gate 200)** | REQUIRED | **BLOCKED** (E2E PASS; one live-restart test pending) | runit service `hg-health-tunnel`; gate **200** @11:56:37Z, queue=0, new `GATE_REQUEST r_164a7d9d471d0306`; 1 tunnel/1 supervisor; no restart loop; negatives + Linux restart/dup E2E PASS. Live on-device restart test needs Termux (`kill` denied, sshd down) → `tests/OUTPUT_b2_runtime_verified.txt` |
 | B5-a phone toolplane hash-chain | CONDITIONAL | BLOCKED | needs Termux |
 | B1 phone-local GO | OUT_OF_SCOPE | n/a | `go_health` targets VPS1 |
 | B4 ChatGPT Action | OUT_OF_SCOPE | n/a | owner decision |
@@ -25,8 +25,12 @@ Targets: VPS1 `160.191.242.198` (edge + canonical GO `/opt/go`, `127.0.0.1:8877`
 closed with a valid external `EXTERNAL_FILE` authority, `COMPLETED`, witness and
 `STARTED→COMPLETED` ledger.
 
-**Regression:** B2 tunnel is currently **FAIL** — the supervisor was a manual `nohup` process and
-did not survive a Termux/runit restart; it is not a managed service. The patched tunnel file is
-intact on `/sdcard`. Restoring B2 (owner Termux action) is the only remaining REQUIRED item.
+**Regression fixed:** B2 tunnel is now runit-managed (`hg-health-tunnel`) and PASSES end-to-end at
+runtime (gate 200 @11:56:37Z, queue=0, correlated `GATE_REQUEST` in device evidence, single
+instance, no restart loop; fail-closed + Linux restart/duplicate E2E PASS). The only unmet
+acceptance item is a **live on-device restart/recovery confirmation**, which needs a Termux command
+Deep cannot run (`kill` denied for the adb UID; `sshd:8022` down; `RUN_COMMAND` no-op) — see
+`tests/OUTPUT_b2_runtime_verified.txt`.
 
-`PHASE2_COMPLETED = FALSE` (B2 REQUIRED currently failing). `ANDROID_HANDOVER_COMPLETED = TRUE`.
+`PHASE2_COMPLETED = FALSE` (B2 live-restart sub-criterion pending; all else PASS).
+`ANDROID_HANDOVER_COMPLETED = TRUE`.

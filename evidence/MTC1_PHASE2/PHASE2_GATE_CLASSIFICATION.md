@@ -11,7 +11,7 @@ Raw captures: `tests/OUTPUT_*.txt`.
 | Gate | Class | Status | Evidence |
 |---|---|---|---|
 | B1 — `go_health` (VPS1 GO liveness + authenticated 200) | **REQUIRED** | **PASS** (runtime) | `/healthz` ok; `/v1/status` Bearer 200; no-token 401 (`OUTPUT_vps1_runtime.txt`) |
-| B2 — tunnel (single/stable, `queue=0`, `GATE_REQUEST 200`) | **REQUIRED** | **FAIL** (regressed 2026-10-10T11:46Z; supervisor was a manual `nohup`, not a service) | edge `queue=1`, gate `000`; no phone tunnel process (`tests/OUTPUT_regression_20261010T1146.txt`) |
+| B2 — tunnel (single/stable, `queue=0`, `GATE_REQUEST 200`) | **REQUIRED** | **BLOCKED** (E2E PASS; live-restart test pending) | runit service; gate 200 @11:56:37Z; queue=0; 1/1/1; no restart loop; negatives + Linux restart/dup E2E PASS (`tests/OUTPUT_b2_runtime_verified.txt`) |
 | TLS — valid cert + active renewal (edge health continuity) | **REQUIRED** | **PASS** (runtime) | cert `notAfter 2026-10-17`; `certbot-renew.timer` active |
 | B5-a — deny-list + canonical fail-closed on runtime | **REQUIRED** | **PASS** (runtime) | canonical `ToolGovernance` DENY on VPS1; production ledger DENIED events |
 | B5-a — phone toolplane hash-chain audit (`audit_tail`) | **CONDITIONAL** | **BLOCKED** (needs Termux) | phone audit is Termux-private; canonical runtime ledger is the runtime audit |

@@ -1,0 +1,55 @@
+MTC-1.0 — B2 runtime verification — 2026-10-10T11:56–12:00Z
+
+== CHECKPOINT A — facts (measured) ==
+- Repo HEAD 775d90e (branch feature/stt-b1-b5-reconciliation-20261010); no B2 code change made.
+- Phone: runit service `hg-health-tunnel` EXISTS: runsvdir=30273 → runsv hg-health-tunnel=13889 →
+  supervisor=13890 (`/sdcard/Phần Mềm HG/toolplane/health-tunnel-supervisor.hardened.sh`) →
+  tunnel=14085 (`python3 /sdcard/HG-GO-DEPLOY/health-tunnel.py`), uid 10460 (u0_a460).
+- Deployed tunnel sha256 = 790de550ced4cb75a2445c4a07f6bca6e18f0dec579fbc4d0683fbfd675e6889
+  (identical to the reviewed artifact; unchanged).
+- Python syntax: `python -m py_compile` exit 0 (NOT bash -n). Shell: `bash -n` of the hardened
+  supervisor exit 0.
+- Counts: tunnel=1, supervisor=1, runsv=1 (no duplicates).
+- Secret scan of /sdcard/hg-tunnel-evidence.jsonl: no Bearer/token/long-hex found.
+
+== CHECKPOINT B — root cause (of the prior failure) ==
+Prior B2 FAIL cause: the supervisor was a manual `nohup` process and was lost when Termux/runit
+restarted. Now it is a runit service (`hg-health-tunnel`), so it is supervised and persisted.
+
+== Acceptance criteria ==
+A. Termux service — PASS (runtime)
+   - runit-supervised `hg-health-tunnel`; exactly one supervisor + one tunnel;
+   - tunnel pid 14085 stable across 4 samples/60s (no restart loop); python compiled OK;
+   - config/credential loaded by the patched tunnel (self-config); no secret in evidence/log.
+
+B. Authenticated end-to-end — PASS (runtime)
+   - fresh gate request https://160.191.242.198/h/phone-primary-u0_a460/api/health (Bearer):
+     HTTP 200, body {"ok":true,"runtime":"HG_TUNNEL_HEALTH",...,"at":"2026-10-10T11:56:37Z"};
+   - edge /edge/tunnel/status: {"queue":0,"pending":0}; device last_seen 11:56:36Z;
+   - device evidence gained a NEW correlated entry:
+     {"at":"2026-10-10T11:56:37Z","event":"GATE_REQUEST","request_id":"r_164a7d9d471d0306",
+      "path":"/api/health","status":200,"bytes":272}
+   - correlation: edge response time 11:56:37Z == phone event time 11:56:37Z (new, not cached).
+
+C. Durability & security — PARTIAL
+   - fail-closed negatives (replica): N1 missing device, N2 missing token, N3 empty token,
+     N4 dry-run no-poll -> 4/4 PASS.
+   - crash/backoff/duplicate (isolated Linux E2E of the exact supervisor, on VPS1 kernel):
+     PASS A missing-config exit=2; B healthy count=1; C backoff observed, no accumulation;
+     D duplicates(2) -> fail-closed logged, no new process (before=2 after=2).
+   - no regression: B1 200/200/401; TLS notAfter 2026-10-17 + timer active; B5-b DENY fail-closed.
+   - external authority unchanged: /etc/hg/authority/root.key mode=600 size=32; provenance EXTERNAL_FILE.
+   - LIVE restart/recovery on the phone: NOT RUN — `adb shell kill 14085` => "Operation not permitted"
+     (adb uid 2000 cannot signal u0_a460), sshd:8022 refused, RUN_COMMAND no-op. No Termux channel.
+
+D. Evidence integrity — PASS (see manifest)
+
+== Result ==
+B2 = BLOCKED. Every runtime-verifiable criterion (A, B, D and C's fail-closed/no-duplicate/
+no-regression/authority-intact) is PASS with fresh evidence. The single unmet item is the LIVE
+on-device restart/recovery confirmation (criterion C), which requires a Termux command Deep
+cannot execute (proven barrier). Exact owner command:
+    sv restart hg-health-tunnel; sleep 5; sv status hg-health-tunnel; \
+      ps -A -o PID,PPID,ARGS | grep -E 'health-tunnel.py$|health-tunnel-supervisor'
+Expected: exactly one supervisor + one tunnel, no duplicates. Deep then re-runs the gate and
+confirms a fresh GATE_REQUEST 200 and queue=0.

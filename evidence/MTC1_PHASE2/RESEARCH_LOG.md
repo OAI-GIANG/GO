@@ -57,7 +57,22 @@ file) and OpenSSH uses the **first obtained value**. A drop-in that sorts earlie
 `PasswordAuthentication yes`). A main-file edit would be ineffective.
 Decision: hardening implemented as a `00-` drop-in and verified via `sshd -T` (see HANDOVER.md).
 
-## 4. Prior sources still in force (read earlier this engagement)
+## 6. Python `os` — environment handling (this task)
+https://docs.python.org/3/library/os.html (accessed 2026-10-10)
+Read: `os.environ` is a mapping captured at import; assigning to it calls `putenv` and affects
+subprocesses; `os.getenv`; `os.path.expanduser`/HOME semantics; Android note (process APIs differ).
+Decisions: the tunnel self-config reads `~/.config/hg/edge.conf` as data and sets `os.environ`
+before polling; the supervisor must export the `HG_EDGE_*` variables to the child. Verified by the
+supervisor logic test T7 (child observed the device var).
+
+## 7. HTTP status codes (IANA registry, RFC 9110)
+https://www.iana.org/assignments/http-status-codes/http-status-codes.xhtml (accessed 2026-10-10; registry last updated 2025-09-15)
+Read: 200 OK (success), 401 Unauthorized, 403 Forbidden, 502 Bad Gateway, 503 Service Unavailable,
+504 Gateway Timeout (all RFC 9110 §15).
+Decisions: B2 acceptance gate = HTTP 200; 401 = auth enforced; 502/503/504 = tunnel/edge failure
+modes (observed `GATE_TIMEOUT 504` when the tunnel was absent). Client timeout handling follows this.
+
+## 8. Prior sources still in force (read earlier this engagement)
 - Certbot user guide (eff-certbot.readthedocs.io) — renewal scheduling; led to adding
   `certbot-renew.timer` (cert renewed 2026-10-13 → 2026-10-17).
 - Termux services README + runit `runsv(8)`/`runsvdir(8)` — service supervision and the
